@@ -23,6 +23,14 @@ part and must stay exactly `AGPL-3.0-or-later`.
 `support/` holds tooling and templates, not library code — keep it out of build
 globs.
 
+## Formatting
+
+`.clang-format` is authoritative and documented inline. Requires clang-format 21
+or newer. Do not hand-format around it — run `clang-format -i` instead.
+
+Note that it enables `InsertBraces` and `RemoveSemicolon`, so clang-format will
+modify code, not just whitespace.
+
 ## Licensing constraints
 
 libarude is dual licensed: AGPLv3 by default, MIT to individual licensees by
