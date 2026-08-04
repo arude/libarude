@@ -94,3 +94,28 @@ if(BUILD_TESTING)
   include(Catch)
   catch_discover_tests(${PROJECT_NAME}_test)
 endif()
+
+# ---- Benchmarks ----
+
+option(ARUDE_BUILD_BENCHMARKS "Build the benchmarks" ON)
+
+if(ARUDE_BUILD_BENCHMARKS)
+  # Without these, google/benchmark builds its own test suite and pulls in
+  # GoogleTest to do it.
+  set(BENCHMARK_ENABLE_TESTING OFF)
+  set(BENCHMARK_ENABLE_GTEST_TESTS OFF)
+  set(BENCHMARK_ENABLE_INSTALL OFF)
+  CPMAddPackage("gh:google/benchmark@1.9.5")
+
+  file(GLOB_RECURSE benchmark_sources CONFIGURE_DEPENDS
+       "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/*.cpp")
+
+  add_executable(${PROJECT_NAME}_benchmark ${benchmark_sources})
+  set_target_properties(${PROJECT_NAME}_benchmark PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                                             CXX_STANDARD_REQUIRED ON
+                                                             CXX_EXTENSIONS OFF)
+  # benchmark_main supplies main(); benchmark alone does not.
+  target_link_libraries(
+    ${PROJECT_NAME}_benchmark PRIVATE ${PROJECT_NAME} benchmark::benchmark_main
+  )
+endif()

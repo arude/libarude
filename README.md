@@ -40,12 +40,34 @@ be run directly, which gives Catch2's own filtering and reporting:
 ./build/libarude_test --list-tests    # What is available.
 ```
 
+### Running the benchmarks
+
+Benchmarks use [Google Benchmark](https://github.com/google/benchmark) and build
+into their own binary. Configure as `Release` — timings from a `Debug` build are
+not worth reading:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+./build/libarude_benchmark
+```
+
+```sh
+./build/libarude_benchmark --benchmark_filter=hello   # A subset.
+./build/libarude_benchmark --benchmark_min_time=0.05s # Finish sooner.
+```
+
+A `CPU scaling is enabled` warning means the governor is free to change clock
+speed mid-run; results will be noisy.
+
 ### Options
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `ARUDE_CXX_STANDARD` | `26` | Language standard; set to `23` for older toolchains |
-| `BUILD_TESTING` | `ON` | `OFF` skips the Catch2 download and the test target entirely |
+| `ARUDE_CXX_STANDARD` | `26`, or `23` if the compiler cannot do 26 | Language standard |
+| `BUILD_TESTING` | `ON` | `OFF` skips the Catch2 download and the test target |
+| `ARUDE_BUILD_BENCHMARKS` | `ON` | `OFF` skips the Google Benchmark download and its target |
+| `ARUDE_ENABLE_COVERAGE` | `OFF` | Adds `--coverage` instrumentation, for the coverage job |
 | `CMAKE_BUILD_TYPE` | — | `Debug` or `Release` |
 
 ### Formatting

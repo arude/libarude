@@ -20,12 +20,15 @@ jobs:
 
       # GCC rather than Clang: --coverage emits gcov data directly, which
       # gcovr reads without the llvm-profdata step Clang would need.
+      # Benchmarks are off here: they add a sizeable dependency build and
+      # contribute nothing to coverage.
       - name: Configure with coverage
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_CXX_COMPILER=g++ \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DARUDE_ENABLE_COVERAGE=ON
+            -DARUDE_ENABLE_COVERAGE=ON \
+            -DARUDE_BUILD_BENCHMARKS=OFF
 
       - name: Build
         run: cmake --build build
@@ -41,6 +44,7 @@ jobs:
           gcovr --root . \
             --exclude '.*/_deps/.*' \
             --exclude 'test/.*' \
+            --exclude 'benchmark/.*' \
             --print-summary \
             --xml-pretty -o coverage.xml \
             build

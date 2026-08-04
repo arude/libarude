@@ -20,5 +20,6 @@ comment:
 
 ignore:
   - "test/**"
+  - "benchmark/**"
   - "build/**"
   - "cmake/**"
