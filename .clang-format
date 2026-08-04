@@ -166,7 +166,7 @@ SpacesInParens: Never
 IncludeBlocks: Preserve
 SortIncludes: CaseInsensitive
 IncludeCategories:
-  - Regex: '^"libarude/'
+  - Regex: '^"arude/'
     Priority: 1
   - Regex: '^<boost/'
     Priority: 2

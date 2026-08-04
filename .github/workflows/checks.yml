@@ -59,7 +59,10 @@ jobs:
           # of the MIT text reads as a standing grant to everyone who clones,
           # which would silently end the dual-licensing arrangement.
           # LICENSING.md describes MIT in prose and must not trip this.
-          if matches=$(git grep -l -F 'Permission is hereby granted, free of charge' -- . 2>/dev/null); then
+          # This workflow quotes the phrase it searches for, so exclude it or
+          # the check trips on itself.
+          if matches=$(git grep -l -F 'Permission is hereby granted, free of charge' \
+              -- . ':(exclude).github/workflows/checks.yml' 2>/dev/null); then
             echo "::error::MIT licence text is committed to this repository:"
             echo "$matches"
             echo "MIT is granted per licensee by arrangement. See LICENSING.md."

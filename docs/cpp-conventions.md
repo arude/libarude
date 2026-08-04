@@ -240,6 +240,20 @@ configuration follow the same rules.
   is the thing to fix.
 - `// TODO: <initials>: What needs doing.`
 
+Every definition written apart from its declaration is preceded by two `///`
+lines — a visual break between definitions, not documentation. The Doxygen
+belongs on the declaration. A trivial body left in the class is its own
+declaration and already carries that Doxygen, so it takes neither:
+
+```cpp
+///
+///
+auto hello_world(const int value) -> int
+{
+  return value;
+}
+```
+
 Every public class and function carries Doxygen: template parameters,
 parameters, return values, and anything a caller cannot infer — units, ranges,
 pre- and post-conditions, side effects, what may be thrown. A one-line

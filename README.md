@@ -7,7 +7,52 @@ A utility and helper library for C++ projects.
 
 ## Building
 
-_To be documented once the build is in place._
+Requires CMake 4.2 or newer, Ninja, and a C++23-capable compiler — Clang 21 is
+what the project is developed against. The first configure downloads Catch2
+through [CPM](https://github.com/cpm-cmake/CPM.cmake), so it needs network
+access; later ones do not.
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+```
+
+In-source builds are rejected, so configure into a separate directory. `build/`
+and `build-*/` are gitignored.
+
+### Running the tests
+
+```sh
+ctest --test-dir build --output-on-failure
+```
+
+Each scenario is registered with CTest individually. The test binary can also
+be run directly, which gives Catch2's own filtering and reporting:
+
+```sh
+./build/libarude_test                 # Everything.
+./build/libarude_test "[hello_world]" # One tag.
+./build/libarude_test --list-tests    # What is available.
+```
+
+### Options
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `ARUDE_CXX_STANDARD` | `26` | Language standard; set to `23` for older toolchains |
+| `BUILD_TESTING` | `ON` | `OFF` skips the Catch2 download and the test target entirely |
+| `CMAKE_BUILD_TYPE` | — | `Debug` or `Release` |
+
+### Formatting
+
+`.clang-format` is authoritative and requires clang-format 21 or newer:
+
+```sh
+clang-format -i $(git ls-files --cached --others --exclude-standard '*.hpp' '*.cpp')
+```
+
+`--others` includes files that are not committed yet; plain `git ls-files`
+would silently skip them.
 
 ## License
 

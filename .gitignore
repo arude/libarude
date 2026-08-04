@@ -1,3 +1,9 @@
 # Personal Claude Code overrides. .claude/settings.json is shared and checked
 # in; this one is per-machine and must not be.
 .claude/settings.local.json
+
+# CMake build trees. Out-of-source builds are enforced by CMakeLists.txt, but
+# the directory name is conventional rather than fixed.
+build/
+build-*/
+
