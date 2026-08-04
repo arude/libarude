@@ -1,0 +1,53 @@
+name: coverage
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: line coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: lukka/get-cmake@latest
+
+      # GCC rather than Clang: --coverage emits gcov data directly, which
+      # gcovr reads without the llvm-profdata step Clang would need.
+      - name: Configure with coverage
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DARUDE_ENABLE_COVERAGE=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # Catch2 and the tests themselves are excluded: what matters is how much
+      # of the library the tests reach, not how much of the tests ran.
+      - name: Report
+        run: |
+          pipx install gcovr
+          gcovr --root . \
+            --exclude '.*/_deps/.*' \
+            --exclude 'test/.*' \
+            --print-summary \
+            --xml-pretty -o coverage.xml \
+            build
+
+      - uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Do not fail the build because an upload was rate limited.
+          fail_ci_if_error: false

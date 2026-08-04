@@ -1,0 +1,24 @@
+# Codecov configuration. See https://docs.codecov.com/docs/codecov-yaml
+
+coverage:
+  status:
+    # Whole-project coverage: allow a small dip so a large honest refactor is
+    # not blocked by rounding.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    # New and changed lines in a pull request. Held to a fixed bar, because
+    # "auto" would let coverage decay one lightly-tested patch at a time.
+    patch:
+      default:
+        target: 80%
+
+comment:
+  layout: "reach, diff, files"
+  require_changes: true
+
+ignore:
+  - "test/**"
+  - "build/**"
+  - "cmake/**"

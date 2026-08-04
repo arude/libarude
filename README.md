@@ -1,5 +1,10 @@
 # libarude
 
+[![build](https://github.com/arude/libarude/actions/workflows/build.yml/badge.svg)](https://github.com/arude/libarude/actions/workflows/build.yml)
+[![checks](https://github.com/arude/libarude/actions/workflows/checks.yml/badge.svg)](https://github.com/arude/libarude/actions/workflows/checks.yml)
+[![coverage](https://codecov.io/gh/arude/libarude/graph/badge.svg)](https://codecov.io/gh/arude/libarude)
+[![license](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSING.md)
+
 A utility and helper library for C++ projects.
 
 > **Status: early.** The repository is being rebuilt from scratch. There is not

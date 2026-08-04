@@ -20,9 +20,22 @@ endif()
 
 # ---- Language standard ----
 
-# Clang 21 accepts 26; drop to 23 if a compiler on the matrix does not.
-set(ARUDE_CXX_STANDARD 26 CACHE STRING "C++ standard to build with")
+# Prefer 26, fall back to 23 where the compiler cannot do it. CMake populates
+# CMAKE_CXX_COMPILE_FEATURES from the actual compiler, so this asks the
+# toolchain rather than guessing from its version.
+if("cxx_std_26" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+  set(arude_default_standard 26)
+else()
+  set(arude_default_standard 23)
+endif()
+
+set(ARUDE_CXX_STANDARD ${arude_default_standard} CACHE STRING "C++ standard to build with")
 set_property(CACHE ARUDE_CXX_STANDARD PROPERTY STRINGS 23 26)
+message(STATUS "libarude: building as C++${ARUDE_CXX_STANDARD}")
+
+# ---- Coverage ----
+
+option(ARUDE_ENABLE_COVERAGE "Build with coverage instrumentation" OFF)
 
 # ---- Add dependencies via CPM ----
 # see https://github.com/TheLartians/CPM.cmake for more info
@@ -47,6 +60,13 @@ set_target_properties(${PROJECT_NAME} PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDA
 
 # being a cross-platform target, we enforce standards conformance on MSVC
 target_compile_options(${PROJECT_NAME} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/permissive->")
+
+# --coverage is understood by both GCC and Clang and emits gcov-format data.
+# PUBLIC so the test executable is instrumented and linked the same way.
+if(ARUDE_ENABLE_COVERAGE)
+  target_compile_options(${PROJECT_NAME} PUBLIC --coverage -O0 -g)
+  target_link_options(${PROJECT_NAME} PUBLIC --coverage)
+endif()
 
 target_include_directories(
   ${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
