@@ -1,0 +1,3 @@
+# Personal Claude Code overrides. .claude/settings.json is shared and checked
+# in; this one is per-machine and must not be.
+.claude/settings.local.json
