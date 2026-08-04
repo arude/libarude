@@ -31,6 +31,20 @@ or newer. Do not hand-format around it — run `clang-format -i` instead.
 Note that it enables `InsertBraces` and `RemoveSemicolon`, so clang-format will
 modify code, not just whitespace.
 
+## C++ conventions
+
+Imported below rather than linked, so the rules are in context while code is
+being written and not only when it is reviewed:
+
+@docs/cpp-conventions.md
+
+## Reviewing
+
+`.claude/skills/libarude-review/` holds the review *procedure* — how to find
+the changed files and what commands to run. The rules it checks against live
+in this file, `docs/cpp-conventions.md`, and `.clang-format`. Keep it that way:
+rules in one place, procedure in the skill.
+
 ## Licensing constraints
 
 libarude is dual licensed: AGPLv3 by default, MIT to individual licensees by

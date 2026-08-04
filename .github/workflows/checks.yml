@@ -1,0 +1,68 @@
+name: checks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compliance:
+    name: licensing and formatting
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the exact version .clang-format targets. Older clang-format
+      # ignores options it does not know silently, so an unpinned install
+      # would produce confidently wrong diffs rather than an error.
+      - name: Install clang-format
+        run: pip install --disable-pip-version-check clang-format==21.1.8
+
+      - name: Report versions
+        run: clang-format --version
+
+      - name: Formatting
+        run: |
+          mapfile -t files < <(git ls-files '*.hpp' '*.cpp' '*.h' '*.cc' '*.hxx' '*.cxx')
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No C++ sources tracked yet; nothing to format."
+            exit 0
+          fi
+          printf 'Checking %d file(s)\n' "${#files[@]}"
+          clang-format --dry-run --Werror "${files[@]}"
+
+      - name: Licence headers
+        run: |
+          mapfile -t files < <(git ls-files '*.hpp' '*.cpp' '*.h' '*.cc' '*.hxx' '*.cxx')
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No C++ sources tracked yet; nothing to check."
+            exit 0
+          fi
+          # Match the SPDX identifier only. Year and surrounding wording may
+          # drift; the machine-readable line may not. See CLAUDE.md.
+          status=0
+          for f in "${files[@]}"; do
+            if ! grep -q 'SPDX-License-Identifier: AGPL-3.0-or-later' "$f"; then
+              echo "::error file=$f::missing SPDX-License-Identifier: AGPL-3.0-or-later"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Licensing integrity
+        run: |
+          # The MIT grant is issued per licensee in writing. A committed copy
+          # of the MIT text reads as a standing grant to everyone who clones,
+          # which would silently end the dual-licensing arrangement.
+          # LICENSING.md describes MIT in prose and must not trip this.
+          if matches=$(git grep -l -F 'Permission is hereby granted, free of charge' -- . 2>/dev/null); then
+            echo "::error::MIT licence text is committed to this repository:"
+            echo "$matches"
+            echo "MIT is granted per licensee by arrangement. See LICENSING.md."
+            exit 1
+          fi
+          echo "No standing MIT grant committed."
