@@ -17,7 +17,7 @@ auto bench_hello_world(benchmark::State& state) -> void
 {
   // DoNotOptimize is load-bearing. hello_world returns its argument, so
   // without it the compiler removes the call and the loop measures nothing.
-  for(auto _ : state)
+  for([[maybe_unused]] auto _ : state)
   {
     benchmark::DoNotOptimize(arude::hello_world(42));
   }
@@ -31,7 +31,7 @@ auto bench_hello_world_range(benchmark::State& state) -> void
 {
   const int value = static_cast<int>(state.range(0));
 
-  for(auto _ : state)
+  for([[maybe_unused]] auto _ : state)
   {
     benchmark::DoNotOptimize(arude::hello_world(value));
   }

@@ -18,6 +18,12 @@ if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
   )
 endif()
 
+# ---- Static analysis ----
+
+# clang-tidy needs a compilation database. Always generated: it costs nothing
+# and editors and language servers use it too.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # ---- Language standard ----
 
 # Prefer 26, fall back to 23 where the compiler cannot do it. CMake populates

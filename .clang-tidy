@@ -1,0 +1,100 @@
+# libarude static analysis.
+#
+# Pinned to clang-tidy 21, like .clang-format. New releases add checks, so an
+# unpinned run starts failing on code nobody touched.
+#
+# Warnings are advisory locally. CI passes --warnings-as-errors='*', so the
+# same config serves both without a second file.
+#
+# Naming rules below are the machine-readable half of docs/cpp-conventions.md.
+# Change them together or they drift.
+#
+# portability-avoid-pragma-once is disabled deliberately: it contradicts the
+# conventions, which require #pragma once. Every compiler libarude targets
+# supports it, and include guards are a well-known source of copy-paste
+# collisions. The convention wins.
+
+Checks: >
+  bugprone-*,
+  clang-analyzer-*,
+  concurrency-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -misc-include-cleaner,
+  -misc-non-private-member-variables-in-classes,
+  -portability-avoid-pragma-once,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+
+# Only our own headers. Without this clang-tidy reports on the main file only,
+# which for a header-mostly library means it checks almost nothing — and a
+# looser pattern would drag in Catch2 and google/benchmark from _deps.
+HeaderFilterRegex: '.*/include/arude/.*'
+
+FormatStyle: file
+
+CheckOptions:
+  # snake_case throughout, per docs/cpp-conventions.md.
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key: readability-identifier-naming.ClassCase
+    value: lower_case
+  - key: readability-identifier-naming.StructCase
+    value: lower_case
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.EnumCase
+    value: lower_case
+  - key: readability-identifier-naming.EnumConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.ConstexprVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: lower_case
+
+  # Private and protected data members take a trailing underscore.
+  - key: readability-identifier-naming.PrivateMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberSuffix
+    value: '_'
+  - key: readability-identifier-naming.ProtectedMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.ProtectedMemberSuffix
+    value: '_'
+  # Public members only appear on passive structs, so they take no suffix.
+  - key: readability-identifier-naming.PublicMemberCase
+    value: lower_case
+
+  # Type aliases end in _t, following the STL.
+  - key: readability-identifier-naming.TypeAliasCase
+    value: lower_case
+  - key: readability-identifier-naming.TypeAliasSuffix
+    value: '_t'
+  - key: readability-identifier-naming.TypedefCase
+    value: lower_case
+  - key: readability-identifier-naming.TypedefSuffix
+    value: '_t'
+
+  # Macros are a last resort; when unavoidable, ALL_CAPS_WITH_UNDERSCORES.
+  - key: readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE
+
+  # The one documented exception to snake_case.
+  - key: readability-identifier-naming.TypeTemplateParameterCase
+    value: CamelCase
+  - key: readability-identifier-naming.ValueTemplateParameterCase
+    value: CamelCase

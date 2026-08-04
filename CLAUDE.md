@@ -28,6 +28,9 @@ globs.
 `.clang-format` is authoritative and documented inline. Requires clang-format 21
 or newer. Do not hand-format around it — run `clang-format -i` instead.
 
+`.clang-tidy` holds the static analysis config, including the naming rules that
+mechanise part of `docs/cpp-conventions.md`. Those two must change together.
+
 Note that it enables `InsertBraces` and `RemoveSemicolon`, so clang-format will
 modify code, not just whitespace.
 

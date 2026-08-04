@@ -1,6 +1,7 @@
 # libarude
 
 [![build](https://github.com/arude/libarude/actions/workflows/build.yml/badge.svg)](https://github.com/arude/libarude/actions/workflows/build.yml)
+[![tidy](https://github.com/arude/libarude/actions/workflows/tidy.yml/badge.svg)](https://github.com/arude/libarude/actions/workflows/tidy.yml)
 [![checks](https://github.com/arude/libarude/actions/workflows/checks.yml/badge.svg)](https://github.com/arude/libarude/actions/workflows/checks.yml)
 [![coverage](https://codecov.io/gh/arude/libarude/graph/badge.svg)](https://codecov.io/gh/arude/libarude)
 [![license](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSING.md)
@@ -69,6 +70,20 @@ speed mid-run; results will be noisy.
 | `ARUDE_BUILD_BENCHMARKS` | `ON` | `OFF` skips the Google Benchmark download and its target |
 | `ARUDE_ENABLE_COVERAGE` | `OFF` | Adds `--coverage` instrumentation, for the coverage job |
 | `CMAKE_BUILD_TYPE` | — | `Debug` or `Release` |
+
+### Static analysis
+
+`.clang-tidy` requires clang-tidy 21 and a compilation database, which the
+build always generates:
+
+```sh
+clang-tidy -p build $(git ls-files 'src/*.cpp' 'test/*.cpp' 'benchmark/*.cpp')
+```
+
+Warnings are advisory locally; CI adds `--warnings-as-errors='*'`. Mechanical
+findings can be applied with `--fix`, though the result is worth reading before
+committing. Suppress a justified exception in place with `// NOLINT(check-name)`
+rather than loosening the config.
 
 ### Formatting
 

@@ -17,6 +17,9 @@ cleaner interface, take the interface.
 - Functions read as commands: `create_instance()`, `do_start()`.
 - Private and protected data members take a trailing underscore: `counter_`.
 - Type aliases end in `_t`, as in the STL: `value_vec_t`.
+- Template parameters are `CamelCase` — `T`, `Allocator`, `TFirstParameter`.
+  The one exception to `snake_case`, so a parameter is distinguishable from a
+  concrete type where it is used.
 - Accessors are named for the property — `size()`, `size(std::size_t)`, never
   `get_size()` / `set_size()`.
 - Namespaces are rooted at `arude`; implementation details in `arude::detail`.
