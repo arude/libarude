@@ -10,12 +10,19 @@ the canonical copy. Reproduced here for convenience — if the two ever disagree
 the file wins, and this block should be corrected to match:
 
 ```cpp
+///
+/// \file
 /// \copyright Copyright 2026 Adrian Rudin (arude).
 /// SPDX-License-Identifier: AGPL-3.0-or-later
 ///
 /// libarude is dual licensed. See LICENSE for the AGPLv3 terms, and
 /// LICENSING.md for the alternative MIT license available by arrangement.
+///
 ```
+
+`\file` is load-bearing, not decoration: Doxygen only extracts namespace-scope
+functions from a file that is itself documented. Drop it and the generated
+documentation silently comes out empty.
 
 Do not use the long FSF boilerplate. The SPDX identifier is the machine-readable
 part and must stay exactly `AGPL-3.0-or-later`.

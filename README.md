@@ -71,6 +71,21 @@ speed mid-run; results will be noisy.
 | `ARUDE_ENABLE_COVERAGE` | `OFF` | Adds `--coverage` instrumentation, for the coverage job |
 | `CMAKE_BUILD_TYPE` | — | `Debug` or `Release` |
 
+### Documentation
+
+Doxygen alone produces the full HTML site — no other tooling required:
+
+```sh
+doxygen
+xdg-open docs/html/index.html
+```
+
+Graphviz is optional. With it you additionally get inheritance and dependency
+diagrams; without it everything else is unchanged.
+
+Undocumented public API is written to `docs/warnings.log` rather than failing
+the run. CI builds the site on every push and uploads it as an artifact.
+
 ### Static analysis
 
 `.clang-tidy` requires clang-tidy 21 and a compilation database, which the

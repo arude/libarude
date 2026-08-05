@@ -7,3 +7,7 @@
 build/
 build-*/
 
+# Generated documentation. docs/ itself is tracked; only the output is not.
+docs/html/
+docs/warnings.log
+

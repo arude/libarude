@@ -1,0 +1,52 @@
+# libarude API documentation.
+#
+# Deliberately minimal: doxygen alone produces the full HTML site. Graphviz is
+# optional and only adds diagrams, so a machine without it still gets complete
+# documentation.
+#
+#   doxygen
+#   xdg-open docs/html/index.html
+#
+# Written against doxygen 1.17. Run `doxygen -u Doxyfile` to migrate this file
+# to a newer release.
+
+PROJECT_NAME           = libarude
+PROJECT_BRIEF          = "A utility and helper library for C++ projects"
+PROJECT_NUMBER         = 0.1
+
+# Only the public headers. src/ is implementation and not part of the API.
+INPUT                  = include
+FILE_PATTERNS          = *.hpp
+RECURSIVE              = YES
+OUTPUT_DIRECTORY       = docs
+HTML_OUTPUT            = html
+
+# LaTeX needs a TeX installation and produces a PDF nobody asked for.
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+
+# Document what is documented, rather than inventing empty entries for
+# everything. Undocumented public API is reported instead of hidden.
+EXTRACT_ALL            = NO
+WARN_IF_UNDOCUMENTED   = YES
+WARN_AS_ERROR          = NO
+WARN_LOGFILE           = docs/warnings.log
+
+# The conventions put the brief on the first line of the block.
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+
+# Skip if graphviz is unavailable: you lose the diagrams, nothing else.
+HAVE_DOT               = YES
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+
+SORT_MEMBER_DOCS       = NO
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+HTML_COLORSTYLE        = TOGGLE
+
+QUIET                  = YES
