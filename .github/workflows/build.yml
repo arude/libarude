@@ -1,5 +1,33 @@
 name: build
 
+# Standards on the runners
+# ------------------------
+# CMakeLists.txt asks the compiler whether it supports C++26 and falls back to
+# C++23. The runner toolchains lag well behind current releases, so as measured
+# on 2026-08-05:
+#
+#   Linux / GCC       GCC 13.3       -> C++23   (fallback)
+#   Linux / Clang     Clang 18.1     -> C++26
+#   Windows / MSVC    MSVC           -> C++23   (fallback)
+#   macOS             AppleClang     -> C++26
+#
+# That is why the pinned row uses Clang. Pinning GCC to 23 tested nothing,
+# because GCC 13.3 already falls back to 23 on its own; pinning Clang forces
+# the fallback on a compiler that would otherwise choose 26.
+#
+# When you need GCC at C++26, the runner's GCC is the blocker, not this file.
+# GCC 14 is the first release that reports cxx_std_26. Add a step to the Linux
+# rows before Configure:
+#
+#     - if: runner.os == 'Linux'
+#       run: |
+#         sudo apt-get update
+#         sudo apt-get install -y gcc-14 g++-14
+#
+# and set cxx: g++-14 on that row. Re-measure the table above afterwards: once
+# GCC reaches 26 on its own, the pinned row may need moving again to keep
+# exercising the fallback.
+
 on:
   push:
     branches: [master]
@@ -24,11 +52,12 @@ jobs:
           - name: Linux / Clang
             os: ubuntu-latest
             cxx: clang++
-          # Pins the fallback path so it cannot rot unnoticed: CMake picks 26
-          # wherever it can, and nothing else would exercise 23.
-          - name: Linux / GCC / C++23
+          # Pins the fallback path so it cannot rot unnoticed. It has to be
+          # Clang: see "Standards on the runners" below for why GCC would test
+          # nothing here.
+          - name: Linux / Clang / C++23
             os: ubuntu-latest
-            cxx: g++
+            cxx: clang++
             std: 23
           - name: Windows / MSVC
             os: windows-latest
