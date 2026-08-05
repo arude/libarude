@@ -1,0 +1,45 @@
+name: docs
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: doxygen
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # doxygen alone is enough for the HTML. graphviz only adds the diagrams,
+      # and is one apt package rather than a toolchain.
+      - name: Install doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+
+      - name: Report versions
+        run: doxygen --version && dot -V
+
+      - name: Generate
+        run: doxygen Doxyfile
+
+      # Undocumented public API is a warning, not a failure, so it does not
+      # block a branch mid-refactor. Surfaced here so it stays visible.
+      - name: Report undocumented API
+        run: |
+          if [ -s docs/warnings.log ]; then
+            echo "::warning::Doxygen reported undocumented API:"
+            cat docs/warnings.log
+          else
+            echo "No documentation warnings."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: html-docs
+          path: docs/html
+          retention-days: 14

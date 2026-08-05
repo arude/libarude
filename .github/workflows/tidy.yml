@@ -1,0 +1,47 @@
+name: tidy
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: lukka/get-cmake@latest
+
+      # Pinned for the same reason as clang-format: each release adds checks,
+      # and an unpinned run starts failing on code nobody touched.
+      - name: Install clang-tidy
+        run: pip install --disable-pip-version-check clang-tidy==21.1.6
+
+      - name: Report versions
+        run: clang-tidy --version
+
+      # A full build, not just a configure: Catch2 generates
+      # catch_user_config.hpp at build time, and clang-tidy cannot parse the
+      # test translation unit without it.
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build
+
+      - name: Analyse
+        run: |
+          mapfile -t sources < <(git ls-files 'src/*.cpp' 'test/*.cpp' 'benchmark/*.cpp')
+          if [ ${#sources[@]} -eq 0 ]; then
+            echo "No translation units to analyse."
+            exit 0
+          fi
+          printf 'Analysing %d translation unit(s)\n' "${#sources[@]}"
+          clang-tidy -p build --warnings-as-errors='*' "${sources[@]}"

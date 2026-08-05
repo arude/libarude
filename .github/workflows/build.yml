@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # One failing toolchain should not hide the state of the others.
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux / GCC
+            os: ubuntu-latest
+            cxx: g++
+          - name: Linux / Clang
+            os: ubuntu-latest
+            cxx: clang++
+          # Pins the fallback path so it cannot rot unnoticed: CMake picks 26
+          # wherever it can, and nothing else would exercise 23.
+          - name: Linux / GCC / C++23
+            os: ubuntu-latest
+            cxx: g++
+            std: 23
+          - name: Windows / MSVC
+            os: windows-latest
+          - name: macOS / AppleClang
+            os: macos-latest
+            cxx: clang++
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # CMakeLists.txt requires 4.2, which is newer than the runner images
+      # ship. This also provides Ninja on every platform.
+      - uses: lukka/get-cmake@latest
+
+      # Ninja on Windows needs the MSVC environment; the Visual Studio
+      # generator sets it up itself, Ninja does not.
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        shell: bash
+        run: |
+          args=(-S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug)
+          if [ -n "${{ matrix.cxx }}" ]; then
+            args+=(-DCMAKE_CXX_COMPILER=${{ matrix.cxx }})
+          fi
+          if [ -n "${{ matrix.std }}" ]; then
+            args+=(-DARUDE_CXX_STANDARD=${{ matrix.std }})
+          fi
+          cmake "${args[@]}"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
