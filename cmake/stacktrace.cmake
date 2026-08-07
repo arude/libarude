@@ -58,10 +58,11 @@ int main()
   cmake_pop_check_state()
 
   if(NOT found)
-    message(
-      WARNING
-        "libarude: no configuration of std::stacktrace links. arude/exception.hpp will not build."
-    )
+    # Not an error: arude/exception.hpp falls back to an empty stand-in where
+    # the standard library has no std::stacktrace, which is libc++ at every
+    # version. Reported so the reason a stacktrace is missing at run time is
+    # visible at configure time rather than guessed at later.
+    message(STATUS "libarude: no std::stacktrace available; exception traces will be empty")
     set(${out_var} "${out_var}-NOTFOUND" PARENT_SCOPE)
     return()
   endif()

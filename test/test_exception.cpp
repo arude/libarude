@@ -106,7 +106,7 @@ SCENARIO("exception_base carries message, location and stacktrace", "[exception]
 
     THEN("a stacktrace was captured")
     {
-      REQUIRE(!ex.stack().empty());
+      REQUIRE(ex.stack().empty() != arude::stacktrace_available);
     }
 
     THEN("to_string mentions the message")

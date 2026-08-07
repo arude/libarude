@@ -16,13 +16,20 @@
 #include <expected>
 #include <format>
 #include <source_location>
-#include <stacktrace>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <utility>
+
+// Out of the sorted group above because it is conditional: libc++ does not
+// implement <stacktrace> at any version, so the header has to be asked for
+// rather than assumed. __cpp_lib_stacktrace then distinguishes a standard
+// library that ships the header from one that also implements it.
+#if __has_include(<stacktrace>)
+  #include <stacktrace>
+#endif // #if __has_include(<stacktrace>)
 
 #if !(defined ARUDE_EXCEPTION_STACKTRACE_SKIP)
   #define ARUDE_EXCEPTION_STACKTRACE_SKIP 1
@@ -90,12 +97,94 @@ using std_runtime_error_base_t = std_runtime_error_noop_base;
 
 } // namespace arude::detail
 
+#if !(defined __cpp_lib_stacktrace)
+
+namespace arude::detail
+{
+
+///
+/// Stand-in for std::stacktrace where the standard library has none.
+/// libc++ does not implement <stacktrace>, so on that platform the choice is
+/// between a stand-in and no arude::exception at all. It holds no frames and
+/// says as much when formatted, which is the honest answer: nothing here can
+/// produce a trace. arude::stacktrace_available tells a caller which of the
+/// two is in play, and the interface is the same either way.
+///
+class null_stacktrace final
+{
+public: // Typedefs
+  using size_type = std::size_t;
+
+public: // Accessors
+  ///
+  /// Captures nothing, so that the call site reads the same on every platform.
+  ///
+  /// \param skip Frames to skip, ignored.
+  /// \param max_depth Frames to capture, ignored.
+  /// \return An empty stacktrace.
+  ///
+  [[nodiscard]] static auto current(size_type skip = 0, size_type max_depth = 0) noexcept -> null_stacktrace;
+
+  ///
+  /// Reports that there are no frames, which is always the case.
+  /// \return Always true.
+  ///
+  [[nodiscard]] constexpr auto empty() const noexcept -> bool;
+
+  ///
+  /// Returns the number of frames held, which is none.
+  /// \return Always zero.
+  ///
+  [[nodiscard]] constexpr auto size() const noexcept -> size_type;
+};
+
+///
+///
+inline auto null_stacktrace::current(
+  [[maybe_unused]] const size_type skip, [[maybe_unused]] const size_type max_depth) noexcept -> null_stacktrace
+{
+  return {};
+}
+
+///
+///
+constexpr auto null_stacktrace::empty() const noexcept -> bool
+{
+  return true;
+}
+
+///
+///
+constexpr auto null_stacktrace::size() const noexcept -> size_type
+{
+  return 0;
+}
+
+} // namespace arude::detail
+
+///
+/// formatter specialization for arude::detail::null_stacktrace.
+///
+template<>
+struct std::formatter<arude::detail::null_stacktrace> : formatter<string>
+{
+  ///
+  /// Writes a note that no stacktrace was available, rather than nothing at all.
+  ///
+  auto format([[maybe_unused]] const arude::detail::null_stacktrace& val, auto& ctx) const
+  {
+    return format_to(ctx.out(), "<stacktrace unsupported on this platform>");
+  }
+};
+
+#endif // #if !(defined __cpp_lib_stacktrace)
+
 // libstdc++ 13 ships <stacktrace> without the formatters the standard pairs
 // with it, and to_string is what those formatters are specified to write, so
 // supplying one here costs nothing in fidelity. __cpp_lib_formatters is the
 // feature test for exactly this pair, so the specialization disappears on a
 // standard library that has its own and cannot collide with it.
-#if !(defined __cpp_lib_formatters)
+#if (defined __cpp_lib_stacktrace) && !(defined __cpp_lib_formatters)
 
 ///
 /// formatter specialization for std::basic_stacktrace.
@@ -137,22 +226,51 @@ struct std::formatter<std::basic_stacktrace<Allocator>>
   }
 };
 
-#endif // #if !(defined __cpp_lib_formatters)
+#endif // #if (defined __cpp_lib_stacktrace) && !(defined __cpp_lib_formatters)
 
 namespace arude
 {
 
 using exception_string_t = std::string;
 
+#if (defined __cpp_lib_stacktrace)
+
+///
+/// Whether this platform can capture a stacktrace.
+/// False where the standard library has no working <stacktrace>, in which case
+/// exception_base still carries a stack() and it is always empty. Branch on
+/// this rather than on a compiler or platform macro.
+///
+inline constexpr auto stacktrace_available = true;
+
+using exception_stacktrace_t = std::stacktrace;
+
+#else
+
+///
+/// \see stacktrace_available
+///
+inline constexpr auto stacktrace_available = false;
+
+using exception_stacktrace_t = detail::null_stacktrace;
+
+#endif // #if (defined __cpp_lib_stacktrace)
+
 ///
 /// Base class for arude exceptions containing message, source location and stacktrace.
 ///
+// The check reports on the class rather than on the destructor, so the
+// suppression has to sit here. Under ARUDE_EXCEPTION_RUNTIME_ERROR_BASE the
+// base is std::runtime_error, whose virtual destructor makes this one
+// implicitly virtual; the destructor is protected either way, which is what
+// actually prevents deletion through a base pointer.
+// NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor)
 class exception_base : public detail::std_runtime_error_base_t
 {
 public: // Typedefs / Constants
   using string_t = exception_string_t;
   using source_location_t = std::source_location;
-  using stacktrace_t = std::stacktrace;
+  using stacktrace_t = exception_stacktrace_t;
 
 public: // Structors / Operators
   ///
@@ -165,7 +283,7 @@ public: // Structors / Operators
   inline explicit exception_base(
     string_t str,
     source_location_t loc = source_location_t::current(),
-    stacktrace_t st = std::stacktrace::current(ARUDE_EXCEPTION_STACKTRACE_SKIP, ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH));
+    stacktrace_t st = stacktrace_t::current(ARUDE_EXCEPTION_STACKTRACE_SKIP, ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH));
 
   ///
   /// Defaulted copy/move constructors and assignment operators.
@@ -229,6 +347,11 @@ protected: // Structors
   /// no one can delete a derived object through a base pointer. That is what
   /// a virtual destructor would have been guarding against, so it is left off.
   ///
+  // Implicitly an override under ARUDE_EXCEPTION_RUNTIME_ERROR_BASE, where the
+  // base contributes a virtual destructor. Annotating it would then satisfy the
+  // check but fail to compile in the default configuration, where there is
+  // nothing to override.
+  // NOLINTNEXTLINE(modernize-use-override,cppcoreguidelines-explicit-virtual-functions)
   ~exception_base() noexcept = default;
 
 private: // Virtuals
@@ -276,7 +399,7 @@ public: // Structors
     string_t str,
     exception_user_data auto&& ud,
     source_location_t loc = source_location_t::current(),
-    stacktrace_t st = std::stacktrace::current(ARUDE_EXCEPTION_STACKTRACE_SKIP, ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH));
+    stacktrace_t st = stacktrace_t::current(ARUDE_EXCEPTION_STACKTRACE_SKIP, ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH));
 
   ///
   /// Defaulted copy/move constructors and assignment operators.
@@ -304,6 +427,9 @@ public: // Structors
   /// to be derived from and deleted as itself: std::throw_with_nested derives
   /// from the thrown type, and only does so when that type is not final.
   ///
+  // Implicitly an override once the configured base brings a virtual
+  // destructor with it; a plain new virtual otherwise. See ~exception_base.
+  // NOLINTNEXTLINE(modernize-use-override,cppcoreguidelines-explicit-virtual-functions)
   virtual ~exception() noexcept = default;
 
 public: // Accessors
@@ -364,6 +490,9 @@ public: // Structors
   /// Virtual defaulted destructor.
   /// \see exception::~exception
   ///
+  // Implicitly an override once the configured base brings a virtual
+  // destructor with it; a plain new virtual otherwise. See ~exception_base.
+  // NOLINTNEXTLINE(modernize-use-override,cppcoreguidelines-explicit-virtual-functions)
   virtual ~exception() noexcept = default;
 
 private: // Overrides

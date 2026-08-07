@@ -147,7 +147,7 @@ SCENARIO("the runtime_error base does not disturb the rest of exception_base", "
     {
       REQUIRE(ex.data() == 42);
       REQUIRE(ex.str() == "failed");
-      REQUIRE(!ex.stack().empty());
+      REQUIRE(ex.stack().empty() != arude::stacktrace_available);
       REQUIRE(std::string_view{ex.where().file_name()}.contains("test_runtime_error_base.cpp"));
     }
   }

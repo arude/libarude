@@ -59,7 +59,7 @@ SCENARIO("the module exports the exception types", "[module]")
     THEN("the accessors work")
     {
       REQUIRE(ex.str() == "module failure");
-      REQUIRE(!ex.stack().empty());
+      REQUIRE(ex.stack().empty() != arude::stacktrace_available);
       REQUIRE(std::string_view{ex.where().file_name()}.contains("test_module.cpp"));
     }
 

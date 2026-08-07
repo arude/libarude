@@ -62,9 +62,11 @@ export namespace arude
 using ::arude::exception;
 using ::arude::exception_base;
 using ::arude::exception_report;
+using ::arude::exception_stacktrace_t;
 using ::arude::exception_string_t;
 using ::arude::exception_user_data;
 using ::arude::hello_world;
+using ::arude::stacktrace_available;
 using ::arude::type_name;
 
 } // namespace arude
