@@ -40,6 +40,14 @@ cleaner interface, take the interface.
 - Order: licence block, `#pragma once`, project includes, third-party includes,
   standard includes, forward declarations, then the `arude` namespace.
   `.clang-format` sorts within each group; keeping the groups apart is yours.
+- Every `#include` comes before every `import`. GCC rejects the other order
+  outright, so this is a portability rule rather than a matter of taste:
+
+  ```cpp
+  #include <print> // All includes first.
+
+  import arude; // Then imports.
+  ```
 
 ## Classes
 

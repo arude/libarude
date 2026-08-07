@@ -91,6 +91,54 @@ target_include_directories(
                          $<INSTALL_INTERFACE:include/${PROJECT_NAME}-${PROJECT_VERSION}>
 )
 
+# ---- C++20 module ----
+
+# Off by default, and a separate target rather than a file set on the library:
+# a target carrying CXX_MODULES needs a scanning generator even from consumers
+# that never import it, so switching this on must not be able to happen by
+# accident. Header consumers are unaffected either way.
+option(ARUDE_BUILD_MODULE "Build the arude C++20 module interface" OFF)
+
+if(ARUDE_BUILD_MODULE)
+  # Module dependencies have to be scanned before anything is compiled, which
+  # Makefiles cannot do. CMake would fail on its own later with a message that
+  # says less about what to do next.
+  if(NOT CMAKE_GENERATOR MATCHES "Ninja|Visual Studio")
+    message(
+      FATAL_ERROR
+        "libarude: ARUDE_BUILD_MODULE requires a generator that scans C++ modules. "
+        "The '${CMAKE_GENERATOR}' generator cannot; reconfigure with -G Ninja."
+    )
+  endif()
+
+  # GCC 15.2 emits the data behind a std::source_location::current() default
+  # argument as a local label, and it does not survive being emitted again in an
+  # importing translation unit: the link fails with "undefined reference to
+  # .Lsrc_loc1". arude/exception.hpp takes such a default on every constructor,
+  # so nothing here can link under GCC. Reproduced in twelve lines with no arude
+  # code involved, so this is the compiler rather than the module layout, and
+  # clang 21 links the same code without complaint.
+  #
+  # Turn ARUDE_ALLOW_GCC_MODULE on to try anyway once GCC has fixed it.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT ARUDE_ALLOW_GCC_MODULE)
+    message(
+      FATAL_ERROR
+        "libarude: ARUDE_BUILD_MODULE cannot work with GCC ${CMAKE_CXX_COMPILER_VERSION}, which mangles "
+        "std::source_location default arguments across a module boundary. Build the module with clang, "
+        "or set ARUDE_ALLOW_GCC_MODULE=ON to try regardless."
+    )
+  endif()
+
+  add_library(${PROJECT_NAME}_module)
+  target_sources(${PROJECT_NAME}_module PUBLIC FILE_SET CXX_MODULES FILES src/arude.cppm)
+  set_target_properties(${PROJECT_NAME}_module PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                                          CXX_STANDARD_REQUIRED ON
+                                                          CXX_EXTENSIONS OFF)
+  # PUBLIC: importers still need the headers' out-of-line definitions, and the
+  # stacktrace runtime that comes with them.
+  target_link_libraries(${PROJECT_NAME}_module PUBLIC ${PROJECT_NAME})
+endif()
+
 # ---- Tests ----
 
 # Catch2 is a test-only dependency: the library itself must not link it.
@@ -105,6 +153,10 @@ if(BUILD_TESTING)
   # They must stay out of the main binary: the macro changes exception_base's
   # base class, and two definitions of it in one program is an ODR violation.
   list(FILTER test_sources EXCLUDE REGEX "/test/config/")
+
+  # test/module imports rather than includes, so it needs the module target and
+  # is only built when that exists.
+  list(FILTER test_sources EXCLUDE REGEX "/test/module/")
 
   add_executable(${PROJECT_NAME}_test ${test_sources})
   set_target_properties(${PROJECT_NAME}_test PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
@@ -131,6 +183,28 @@ if(BUILD_TESTING)
     ${PROJECT_NAME}_test_runtime_error_base PRIVATE ${PROJECT_NAME} Catch2::Catch2WithMain
   )
   catch_discover_tests(${PROJECT_NAME}_test_runtime_error_base)
+
+  # Guards the re-export list in src/arude.cppm. A public name added to a header
+  # and not listed there is invisible to module consumers and to nobody else, so
+  # nothing but this test would notice.
+  if(ARUDE_BUILD_MODULE)
+    # header_consumer.cpp includes the header while test_module.cpp imports the
+    # module, so the pair also covers the two consumption styles meeting in one
+    # program.
+    add_executable(
+      ${PROJECT_NAME}_test_module test/module/test_module.cpp test/module/header_consumer.cpp
+    )
+    set_target_properties(${PROJECT_NAME}_test_module PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                                                 CXX_STANDARD_REQUIRED ON
+                                                                 CXX_EXTENSIONS OFF)
+    # The project root, so the pair can include each other's declaration from
+    # the root the way docs/cpp-conventions.md asks rather than by relative path.
+    target_include_directories(${PROJECT_NAME}_test_module PRIVATE ${PROJECT_SOURCE_DIR})
+    target_link_libraries(
+      ${PROJECT_NAME}_test_module PRIVATE ${PROJECT_NAME}_module Catch2::Catch2WithMain
+    )
+    catch_discover_tests(${PROJECT_NAME}_test_module)
+  endif()
 endif()
 
 # ---- Benchmarks ----
