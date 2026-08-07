@@ -37,6 +37,12 @@ struct opaque_payload
   int value = 0;
 };
 
+// Deep enough to pass the report's limit several times over, and no deeper.
+// Every level here is a live exception with a try/catch frame behind it, and at
+// twenty times the limit that overflowed the 1 MB default stack on Windows —
+// the chain, not the report, which bounds its own recursion either way.
+constexpr auto deep_nesting = ARUDE_EXCEPTION_REPORT_MAX_DEPTH * 3;
+
 ///
 /// Throws a chain of nested std::runtime_error, innermost first.
 ///
@@ -381,7 +387,7 @@ SCENARIO("exception_report bounds its own recursion", "[exception]")
 
     try
     {
-      throw_nested_runtime(ARUDE_EXCEPTION_REPORT_MAX_DEPTH * 20);
+      throw_nested_runtime(deep_nesting);
     }
     catch(...)
     {
@@ -403,7 +409,7 @@ SCENARIO("exception_report bounds its own recursion", "[exception]")
   {
     try
     {
-      throw_nested_runtime(ARUDE_EXCEPTION_REPORT_MAX_DEPTH * 20);
+      throw_nested_runtime(deep_nesting);
     }
     catch(...)
     {
