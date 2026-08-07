@@ -38,7 +38,16 @@ jobs:
 
       - name: Analyse
         run: |
-          mapfile -t sources < <(git ls-files 'src/*.cpp' 'test/*.cpp' 'benchmark/*.cpp')
+          # test/module is excluded, not merely unbuilt. Analysing it needs the
+          # module built, and a module's BMI can only be read by the compiler
+          # version that wrote it: the runner's clang builds it, while
+          # clang-tidy here is a pinned pip build of a different version, which
+          # rejects the .pcm outright. Left in, the files would instead be
+          # analysed with fallback flags and invent diagnostics no build
+          # produces. Lint them locally with a matching clang and the module on.
+          mapfile -t sources < <(
+            git ls-files 'src/*.cpp' 'test/*.cpp' 'benchmark/*.cpp' | grep -v '^test/module/'
+          )
           if [ ${#sources[@]} -eq 0 ]; then
             echo "No translation units to analyse."
             exit 0

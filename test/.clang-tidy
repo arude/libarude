@@ -1,0 +1,12 @@
+# Test-only overrides. Everything in the root .clang-tidy still applies; this
+# file only subtracts, and InheritParentConfig is what keeps the rest in force.
+
+InheritParentConfig: true
+
+# Catch2 expands every SCENARIO / GIVEN / WHEN / THEN into a conditional and a
+# loop inside one generated function, so this check scores the expansion rather
+# than anything written here — it names the function dummyFunctionN. A scenario
+# covering a single behaviour already lands past the threshold, and splitting
+# further to satisfy the number would break up tests that belong together.
+Checks: >
+  -readability-function-cognitive-complexity,

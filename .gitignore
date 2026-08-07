@@ -11,3 +11,6 @@ build-*/
 docs/html/
 docs/warnings.log
 
+# clangd's index, dropped in the workspace root by the VS Code extension.
+.cache/
+

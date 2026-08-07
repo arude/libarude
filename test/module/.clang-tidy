@@ -1,0 +1,13 @@
+# Module-test overrides. Everything in ../.clang-tidy and the root .clang-tidy
+# still applies; this file only subtracts.
+
+InheritParentConfig: true
+
+# On a translation unit that imports a module, clang-tidy reports the operator
+# new / operator delete declarations in libstdc++'s <new> as redundant, and
+# attaches no source location to the finding. With no location, HeaderFilterRegex
+# cannot filter it out the way it filters every other system-header diagnostic.
+# Nothing in this directory declares those operators, so the check has nothing
+# to say here and every report it makes is the same artefact.
+Checks: >
+  -readability-redundant-declaration,
