@@ -90,6 +90,55 @@ using std_runtime_error_base_t = std_runtime_error_noop_base;
 
 } // namespace arude::detail
 
+// libstdc++ 13 ships <stacktrace> without the formatters the standard pairs
+// with it, and to_string is what those formatters are specified to write, so
+// supplying one here costs nothing in fidelity. __cpp_lib_formatters is the
+// feature test for exactly this pair, so the specialization disappears on a
+// standard library that has its own and cannot collide with it.
+#if !(defined __cpp_lib_formatters)
+
+///
+/// formatter specialization for std::basic_stacktrace.
+/// \tparam Allocator The stacktrace's allocator.
+///
+template<typename Allocator>
+struct std::formatter<std::basic_stacktrace<Allocator>>
+{
+  ///
+  /// Parses the format-spec, which the standard requires to be empty.
+  ///
+  /// \param ctx The parse context.
+  /// \return The iterator at the end of the parsed spec.
+  /// \throws std::format_error If anything precedes the closing brace.
+  ///
+  constexpr auto parse(std::format_parse_context& ctx) -> std::format_parse_context::iterator
+  {
+    auto it = ctx.begin();
+
+    if(it != ctx.end() && *it != '}')
+    {
+      throw std::format_error{"arude: std::basic_stacktrace accepts no format spec."};
+    }
+
+    return it;
+  }
+
+  ///
+  /// Writes the stacktrace exactly as std::to_string renders it.
+  ///
+  /// \param val The stacktrace to format.
+  /// \param ctx The format context.
+  /// \return The iterator past the written output.
+  ///
+  auto format(const std::basic_stacktrace<Allocator>& val, std::format_context& ctx) const
+    -> std::format_context::iterator
+  {
+    return std::format_to(ctx.out(), "{}", std::to_string(val));
+  }
+};
+
+#endif // #if !(defined __cpp_lib_formatters)
+
 namespace arude
 {
 
@@ -626,6 +675,11 @@ inline auto exception_report() -> exception_string_t
       nested_string = std::format("{}{}", nested_string, ex.to_string());
       std::rethrow_if_nested(ex);
     }
+// <expected> exists as a header on toolchains that do not implement it, so the
+// include alone proves nothing; this is the feature test that does. Where it is
+// missing the handlers simply go, and such an exception falls through to the
+// std::exception branch below rather than being reported by its own name.
+#if (defined __cpp_lib_expected)
     catch(const std::bad_expected_access<std::string>& ex)
     {
       nested_string += std::format("std::bad_expected_access - Error: {}", ex.error());
@@ -636,6 +690,7 @@ inline auto exception_report() -> exception_string_t
       nested_string += std::format("std::bad_expected_access {}", ex.what());
       std::rethrow_if_nested(ex);
     }
+#endif // #if (defined __cpp_lib_expected)
     catch(const std::system_error& ex)
     {
       nested_string += std::format("std::system_error: {} ({})", ex.what(), ex.code().value());

@@ -147,6 +147,20 @@ include(CTest)
 if(BUILD_TESTING)
   CPMAddPackage("gh:catchorg/Catch2@3.15.3")
 
+  # Catch2 asks only for cxx_std_14, so it compiles at a lower standard than the
+  # tests that link it. Its StringMaker<std::string_view> is then declared but
+  # never defined — the library half never saw std::string_view exist — and a
+  # test that compares string_views fails to link. That is what broke the MSVC
+  # row; the Linux rows survived it only because their default standard is high
+  # enough. Building Catch2 at our standard keeps the two halves in step.
+  foreach(catch_target IN ITEMS Catch2 Catch2WithMain)
+    if(TARGET ${catch_target})
+      set_target_properties(${catch_target} PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                                       CXX_STANDARD_REQUIRED ON
+                                                       CXX_EXTENSIONS OFF)
+    endif()
+  endforeach()
+
   file(GLOB_RECURSE test_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp")
 
   # test/config holds translation units built against a different exception base.
