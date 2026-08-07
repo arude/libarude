@@ -39,6 +39,12 @@ set(ARUDE_CXX_STANDARD ${arude_default_standard} CACHE STRING "C++ standard to b
 set_property(CACHE ARUDE_CXX_STANDARD PROPERTY STRINGS 23 26)
 message(STATUS "libarude: building as C++${ARUDE_CXX_STANDARD}")
 
+# ---- std::stacktrace runtime ----
+
+include(cmake/stacktrace.cmake)
+
+arude_find_stacktrace_library(ARUDE_STACKTRACE_LIBRARY ${ARUDE_CXX_STANDARD})
+
 # ---- Coverage ----
 
 option(ARUDE_ENABLE_COVERAGE "Build with coverage instrumentation" OFF)
@@ -74,6 +80,12 @@ if(ARUDE_ENABLE_COVERAGE)
   target_link_options(${PROJECT_NAME} PUBLIC --coverage)
 endif()
 
+# PUBLIC: arude/exception.hpp is a header, so every consumer needs the library
+# too, not just this target.
+if(ARUDE_STACKTRACE_LIBRARY)
+  target_link_libraries(${PROJECT_NAME} PUBLIC ${ARUDE_STACKTRACE_LIBRARY})
+endif()
+
 target_include_directories(
   ${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
                          $<INSTALL_INTERFACE:include/${PROJECT_NAME}-${PROJECT_VERSION}>
@@ -89,6 +101,11 @@ if(BUILD_TESTING)
 
   file(GLOB_RECURSE test_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp")
 
+  # test/config holds translation units built against a different exception base.
+  # They must stay out of the main binary: the macro changes exception_base's
+  # base class, and two definitions of it in one program is an ODR violation.
+  list(FILTER test_sources EXCLUDE REGEX "/test/config/")
+
   add_executable(${PROJECT_NAME}_test ${test_sources})
   set_target_properties(${PROJECT_NAME}_test PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
                                                         CXX_STANDARD_REQUIRED ON
@@ -99,6 +116,21 @@ if(BUILD_TESTING)
   list(APPEND CMAKE_MODULE_PATH "${Catch2_SOURCE_DIR}/extras")
   include(Catch)
   catch_discover_tests(${PROJECT_NAME}_test)
+
+  # ARUDE_EXCEPTION_RUNTIME_ERROR_BASE is set here rather than in the source, so
+  # the file cannot be built against the wrong configuration by accident.
+  add_executable(${PROJECT_NAME}_test_runtime_error_base test/config/test_runtime_error_base.cpp)
+  set_target_properties(${PROJECT_NAME}_test_runtime_error_base
+                        PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                   CXX_STANDARD_REQUIRED ON
+                                   CXX_EXTENSIONS OFF)
+  target_compile_definitions(
+    ${PROJECT_NAME}_test_runtime_error_base PRIVATE ARUDE_EXCEPTION_RUNTIME_ERROR_BASE
+  )
+  target_link_libraries(
+    ${PROJECT_NAME}_test_runtime_error_base PRIVATE ${PROJECT_NAME} Catch2::Catch2WithMain
+  )
+  catch_discover_tests(${PROJECT_NAME}_test_runtime_error_base)
 endif()
 
 # ---- Benchmarks ----

@@ -13,6 +13,15 @@
 # conventions, which require #pragma once. Every compiler libarude targets
 # supports it, and include guards are a well-known source of copy-paste
 # collisions. The convention wins.
+#
+# readability-redundant-access-specifiers is disabled for the same reason: the
+# declaration order in docs/cpp-conventions.md allows an access specifier to be
+# repeated where grouping helps, which the check reports as redundant.
+#
+# readability-use-concise-preprocessor-directives likewise: it rewrites
+# #if (defined XXX) to #ifdef, and #elif (defined XXX) to #elifdef, which is
+# the opposite of what the conventions ask for. The long form is required
+# because it composes with && and || without having to be rewritten first.
 
 Checks: >
   bugprone-*,
@@ -35,6 +44,8 @@ Checks: >
   -portability-avoid-pragma-once,
   -readability-identifier-length,
   -readability-magic-numbers,
+  -readability-redundant-access-specifiers,
+  -readability-use-concise-preprocessor-directives,
 
 # Only our own headers. Without this clang-tidy reports on the main file only,
 # which for a header-mostly library means it checks almost nothing — and a
@@ -44,6 +55,13 @@ HeaderFilterRegex: '.*/include/arude/.*'
 FormatStyle: file
 
 CheckOptions:
+  # The ARUDE_* macros are build-time configuration: a consumer defines one
+  # before including the header to override the default. A constexpr constant
+  # cannot be overridden that way, so the check's advice does not apply to
+  # them. Macros outside the prefix are still reported.
+  - key: cppcoreguidelines-macro-usage.AllowedRegexp
+    value: '^ARUDE_'
+
   # snake_case throughout, per docs/cpp-conventions.md.
   - key: readability-identifier-naming.NamespaceCase
     value: lower_case
@@ -66,7 +84,12 @@ CheckOptions:
   - key: readability-identifier-naming.GlobalConstantCase
     value: lower_case
 
-  # Private and protected data members take a trailing underscore.
+  # Private and protected data members take a trailing underscore. ClassMember
+  # covers the static ones, which the Private/Protected options do not reach.
+  - key: readability-identifier-naming.ClassMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.ClassMemberSuffix
+    value: '_'
   - key: readability-identifier-naming.PrivateMemberCase
     value: lower_case
   - key: readability-identifier-naming.PrivateMemberSuffix

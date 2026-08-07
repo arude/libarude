@@ -1,0 +1,684 @@
+///
+/// \file
+/// \copyright Copyright 2026 Adrian Rudin (arude).
+/// SPDX-License-Identifier: AGPL-3.0-or-later
+///
+/// libarude is dual licensed. See LICENSE for the AGPLv3 terms, and
+/// LICENSING.md for the alternative MIT license available by arrangement.
+///
+#pragma once
+
+#include "arude/type_name.hpp"
+
+#include <concepts>
+#include <cstddef>
+#include <exception>
+#include <expected>
+#include <format>
+#include <source_location>
+#include <stacktrace>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <type_traits>
+#include <utility>
+
+#if !(defined ARUDE_EXCEPTION_STACKTRACE_SKIP)
+  #define ARUDE_EXCEPTION_STACKTRACE_SKIP 1
+#endif // #if !(defined ARUDE_EXCEPTION_STACKTRACE_SKIP)
+
+#if !(defined ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH)
+  #define ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH 10
+#endif // #if !(defined ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH)
+
+// Bounds the recursion in exception_report(). Ten levels of genuine nesting is
+// already pathological, so anything past this is a runaway rather than a
+// report that got cut short.
+#if !(defined ARUDE_EXCEPTION_REPORT_MAX_DEPTH)
+  #define ARUDE_EXCEPTION_REPORT_MAX_DEPTH 16
+#endif // #if !(defined ARUDE_EXCEPTION_REPORT_MAX_DEPTH)
+
+///
+/// formatter specialization for std::source_location.
+///
+template<>
+struct std::formatter<std::source_location> : formatter<string>
+{
+  ///
+  /// Formats the std::source_location object into a string representation.
+  ///
+  auto format(const auto& val, auto& ctx) const
+  {
+    return format_to(ctx.out(), "{}({}:{}) '{}'", val.file_name(), val.line(), val.column(), val.function_name());
+  }
+};
+
+namespace arude::detail
+{
+
+///
+/// Base that exception_base inherits, selected by ARUDE_EXCEPTION_RUNTIME_ERROR_BASE.
+/// With the macro defined an arude exception is a std::exception and can be
+/// caught as one; without it the hierarchy stays separate. Either way the base
+/// is constructed from the message, so exception_base initialises it the same
+/// way in both configurations.
+///
+#if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+
+using std_runtime_error_base_t = std::runtime_error;
+
+#else
+
+///
+/// Stand-in base for the configuration where arude exceptions are not std exceptions.
+/// Empty, so it costs nothing under empty base optimisation, and it takes the
+/// message purely so that its constructor matches std::runtime_error's.
+///
+struct std_runtime_error_noop_base
+{
+  ///
+  /// Accepts the error message and discards it.
+  /// \param str The error message, which this base has no use for.
+  ///
+  explicit std_runtime_error_noop_base([[maybe_unused]] std::string_view str) {}
+};
+
+using std_runtime_error_base_t = std_runtime_error_noop_base;
+
+#endif // #if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+
+} // namespace arude::detail
+
+namespace arude
+{
+
+using exception_string_t = std::string;
+
+///
+/// Base class for arude exceptions containing message, source location and stacktrace.
+///
+class exception_base : public detail::std_runtime_error_base_t
+{
+public: // Typedefs / Constants
+  using string_t = exception_string_t;
+  using source_location_t = std::source_location;
+  using stacktrace_t = std::stacktrace;
+
+public: // Structors / Operators
+  ///
+  /// Primary constructor.
+  ///
+  /// \param str The error message.
+  /// \param loc The source location where the error occurred.
+  /// \param st The stack trace at the time of the error.
+  ///
+  inline explicit exception_base(
+    string_t str,
+    source_location_t loc = source_location_t::current(),
+    stacktrace_t st = std::stacktrace::current(ARUDE_EXCEPTION_STACKTRACE_SKIP, ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH));
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  exception_base(const exception_base&) = default;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  exception_base(exception_base&&) = default;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  auto operator=(const exception_base&) -> exception_base& = default;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  auto operator=(exception_base&&) -> exception_base& = default;
+
+public: // Accessors
+  ///
+  /// Returns the error message.
+  /// \return The error message as string.
+  ///
+  [[nodiscard]] constexpr auto str() const -> const string_t&;
+
+  ///
+  /// Returns the error message as modifiable string.
+  /// This can be used to modify the error message and then rethrow the exception.
+  ///
+  /// \return The error message as modifiable string.
+  ///
+  [[nodiscard]] constexpr auto str() -> string_t&;
+
+  ///
+  /// Returns the source location where the error occurred.
+  /// \return The source location as source_location_t.
+  ///
+  [[nodiscard]] constexpr auto where() const -> const source_location_t&;
+
+  ///
+  /// Returns the stack trace at the time of the error.
+  /// \return The stack trace as stacktrace_t.
+  ///
+  [[nodiscard]] constexpr auto stack() const -> const stacktrace_t&;
+
+  ///
+  /// Returns a formatted string representation of the exception.
+  /// Collects string form derived classes based on if the payload is formattable.
+  ///
+  /// \return The formatted string representation.
+  ///
+  [[nodiscard]] inline auto to_string() const -> string_t;
+
+protected: // Structors
+  ///
+  /// Defaulted destructor (Protected).
+  /// Protected rather than public so the class cannot be used directly, and so
+  /// no one can delete a derived object through a base pointer. That is what
+  /// a virtual destructor would have been guarding against, so it is left off.
+  ///
+  ~exception_base() noexcept = default;
+
+private: // Virtuals
+  ///
+  /// Returns a formatted string representation of the derived exception.
+  /// \return The formatted string representation.
+  ///
+  [[nodiscard]] virtual auto do_to_string() const -> string_t = 0;
+
+private: // Variables
+  string_t str_;
+  source_location_t loc_;
+  stacktrace_t st_;
+};
+
+///
+/// Concept for valid user data types for arude exceptions.
+/// Allows copy/move constructible types or void (for no payload).
+///
+/// \tparam UD User data type.
+///
+template<typename UD>
+concept exception_user_data = std::copy_constructible<UD> || std::move_constructible<UD> || std::is_void_v<UD>;
+
+///
+/// Arude exception with user data payload.
+/// \tparam UD User data type (default = void).
+///
+template<exception_user_data UD = void>
+class exception : public exception_base
+{
+public: // Typedefs
+  using user_data_t = UD;
+
+public: // Structors
+  ///
+  /// Primary constructor.
+  ///
+  /// \param str The error message.
+  /// \param ud The user data payload.
+  /// \param loc The source location where the error occurred.
+  /// \param st The stack trace at the time of the error.
+  ///
+  exception(
+    string_t str,
+    exception_user_data auto&& ud,
+    source_location_t loc = source_location_t::current(),
+    stacktrace_t st = std::stacktrace::current(ARUDE_EXCEPTION_STACKTRACE_SKIP, ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH));
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  exception(const exception&) = default;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  exception(exception&&) = default;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  auto operator=(const exception&) -> exception& = default;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  auto operator=(exception&&) -> exception& = default;
+
+  ///
+  /// Virtual defaulted destructor.
+  /// Public and virtual, unlike exception_base's, because this class is meant
+  /// to be derived from and deleted as itself: std::throw_with_nested derives
+  /// from the thrown type, and only does so when that type is not final.
+  ///
+  virtual ~exception() noexcept = default;
+
+public: // Accessors
+  ///
+  /// Returns the user data payload as const reference.
+  /// \return The user data payload.
+  ///
+  [[nodiscard]] constexpr auto data() const -> const user_data_t&;
+
+  ///
+  /// Returns the user data payload as modifiable reference.
+  /// This can be used to modify the user data payload and then rethrow the exception.
+  ///
+  /// \return The user data payload.
+  ///
+  [[nodiscard]] constexpr auto data() -> user_data_t&;
+
+private: // Overrides
+  ///
+  /// \see exception_base::do_to_string
+  ///
+  [[nodiscard]] auto do_to_string() const -> string_t override;
+
+private: // Variables
+  user_data_t data_;
+};
+
+template<>
+class exception<void> : public exception_base
+{
+public: // Typedefs
+  using user_data_t = void;
+
+public: // Structors
+  using exception_base::exception_base;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  exception(const exception&) = default;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  exception(exception&&) = default;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  auto operator=(const exception&) -> exception& = default;
+
+  ///
+  /// Defaulted copy/move constructors and assignment operators.
+  ///
+  auto operator=(exception&&) -> exception& = default;
+
+  ///
+  /// Virtual defaulted destructor.
+  /// \see exception::~exception
+  ///
+  virtual ~exception() noexcept = default;
+
+private: // Overrides
+  ///
+  /// \see exception_base::do_to_string
+  ///
+  [[nodiscard]] inline auto do_to_string() const -> string_t override;
+};
+
+// CTAD guide for exception<void> - deduce void when only string-like argument is provided
+exception(exception_base::string_t) -> exception<void>;
+exception(const char*) -> exception<void>;
+
+// CTAD guide for exception<UD> - deduce UD from the user data argument
+template<exception_user_data UD>
+exception(exception_base::string_t, UD&&) -> exception<std::remove_cvref_t<UD>>;
+template<exception_user_data UD>
+exception(const char*, UD&&) -> exception<std::remove_cvref_t<UD>>;
+
+///
+///
+exception_base::exception_base(string_t str, source_location_t loc, stacktrace_t st)
+  : detail::std_runtime_error_base_t{str}
+  , str_{std::move(str)}
+  , loc_{loc}
+  , st_{std::move(st)}
+{
+}
+
+///
+///
+constexpr auto exception_base::str() const -> const string_t&
+{
+  return str_;
+}
+
+///
+///
+constexpr auto exception_base::str() -> string_t&
+{
+  return str_;
+}
+
+///
+///
+constexpr auto exception_base::where() const -> const source_location_t&
+{
+  return loc_;
+}
+
+///
+///
+constexpr auto exception_base::stack() const -> const stacktrace_t&
+{
+  return st_;
+}
+
+///
+///
+auto exception_base::to_string() const -> string_t
+{
+  return do_to_string();
+}
+
+///
+///
+template<exception_user_data UD>
+exception<UD>::exception(string_t str, exception_user_data auto&& ud, source_location_t loc, stacktrace_t st)
+  : exception_base{std::move(str), std::move(loc), std::move(st)}
+  , data_{std::forward<decltype(ud)>(ud)}
+{
+}
+
+///
+///
+template<exception_user_data UD>
+constexpr auto exception<UD>::data() const -> const user_data_t&
+{
+  return data_;
+}
+
+///
+///
+template<exception_user_data UD>
+constexpr auto exception<UD>::data() -> user_data_t&
+{
+  return data_;
+}
+
+///
+///
+template<exception_user_data UD>
+auto exception<UD>::do_to_string() const -> string_t
+{
+  try
+  {
+    if constexpr(std::formattable<UD, string_t::value_type>)
+    {
+      return std::format(
+        "exception<{}> - str: '{}'\ndata: '{}'\nlocation: {}\nstacktrace: {}",
+        type_name<UD>(),
+        str(),
+        data_,
+        where(),
+        stack());
+    }
+    else
+    {
+      return std::format(
+        "exception<{}> - str: '{}'\ndata: '<not formattable>'\nlocation: {}\nstacktrace: {}",
+        type_name<UD>(),
+        str(),
+        where(),
+        stack());
+    }
+  }
+  catch(...)
+  {
+    return "Error formatting exception details";
+  }
+}
+
+///
+///
+auto exception<void>::do_to_string() const -> string_t
+{
+  try
+  {
+    return std::format("exception<void> - str: '{}'\nlocation: {}\nstacktrace: {}", str(), where(), stack());
+  }
+  catch(...)
+  {
+    return "Error formatting exception details";
+  }
+}
+
+} // namespace arude
+
+///
+/// formatter specialization for arude::exception_base.
+///
+template<>
+struct std::formatter<arude::exception_base> : formatter<string>
+{
+  auto format(const auto& val, auto& ctx) const { return format_to(ctx.out(), "{}", val.to_string()); }
+};
+
+namespace arude::detail
+{
+
+///
+/// Bounds the recursion depth of arude::exception_report().
+/// exception_report() recurses to walk a chain of nested exceptions, and it
+/// makes that recursive call from a catch handler which also catches whatever
+/// the report building itself throws. That pairing has no natural end: if
+/// formatting throws std::bad_alloc, the handler catches it, reports it, and
+/// formats again. A cyclic nesting chain arrives at the same place by another
+/// route, and a merely deep one exhausts the stack. Counting the levels and
+/// refusing to go further is the only exit that covers all three.
+///
+/// The count is per thread, since two threads may be reporting unrelated
+/// exceptions at the same time.
+///
+// A limit below one would make the outermost report truncate itself, turning
+// every report into the truncation note. Catch that at the point of override
+// rather than leaving it to be puzzled over at runtime.
+static_assert(ARUDE_EXCEPTION_REPORT_MAX_DEPTH >= 1, "ARUDE_EXCEPTION_REPORT_MAX_DEPTH must be at least 1.");
+
+class exception_report_guard final
+{
+public: // Structors / Operators
+  ///
+  /// Enters one level of the report, which is left again on destruction.
+  ///
+  exception_report_guard();
+
+  ///
+  /// Leaves the level entered by the constructor.
+  ///
+  ~exception_report_guard();
+
+  exception_report_guard(const exception_report_guard&) = delete;
+  exception_report_guard(exception_report_guard&&) = delete;
+  auto operator=(const exception_report_guard&) -> exception_report_guard& = delete;
+  auto operator=(exception_report_guard&&) -> exception_report_guard& = delete;
+
+public: // Accessors
+  ///
+  /// Reports whether this level is past the limit.
+  /// \return true if the report must stop rather than recurse again.
+  ///
+  [[nodiscard]] auto exhausted() const -> bool;
+
+private: // Data
+  static inline thread_local std::size_t depth_ = 0;
+
+  // The depth this guard entered at. Held per instance rather than read back
+  // from depth_, so a guard reports on its own level and not on whatever a
+  // deeper call happens to have left behind.
+  std::size_t level_;
+};
+
+///
+///
+inline exception_report_guard::exception_report_guard()
+  : level_{++depth_}
+{
+}
+
+///
+///
+inline exception_report_guard::~exception_report_guard()
+{
+  --depth_;
+}
+
+///
+///
+inline auto exception_report_guard::exhausted() const -> bool
+{
+  return level_ > ARUDE_EXCEPTION_REPORT_MAX_DEPTH;
+}
+
+} // namespace arude::detail
+
+namespace arude
+{
+
+///
+/// Creates an exception report as string by reading all known exception types and unwinding nested exceptions.
+/// Must be called from inside a catch handler; with no exception in flight the report says so instead of failing.
+///
+/// Nested exceptions are unwound by recursion, bounded by ARUDE_EXCEPTION_REPORT_MAX_DEPTH. Past that the report
+/// stops and ends with a note saying it was truncated, rather than recursing until the stack is gone.
+///
+/// \return The exception report as string, truncated if the depth limit was reached.
+/// \throws std::bad_alloc If the report string cannot be allocated. Callers in a catch(...) handler that must not
+///         throw should guard the call accordingly.
+///
+[[nodiscard]] auto exception_report() -> exception_string_t;
+
+///
+/// Calls exception_report() with a given exception pointer and returns the report as string.
+/// This function is useful when you have an exception pointer and want to generate a report without rethrowing the
+/// exception.
+///
+/// \param eptr Exception pointer.
+/// \return String containing the exception information, truncated if the depth limit was reached.
+/// \throws std::bad_alloc If the report string cannot be allocated.
+///
+[[nodiscard]] auto exception_report(const std::exception_ptr& eptr) -> exception_string_t;
+
+///
+///
+// The recursion is the mechanism for unwinding nested exceptions, not an
+// oversight; exception_report_guard is what bounds it.
+// NOLINTNEXTLINE(misc-no-recursion)
+inline auto exception_report() -> exception_string_t
+{
+  const auto guard = detail::exception_report_guard{};
+
+  if(guard.exhausted())
+  {
+    return "Exception report truncated: nesting depth limit reached\n";
+  }
+
+  auto nested_string = exception_string_t{};
+
+  try
+  {
+    try
+    {
+      if(auto ex = std::current_exception())
+      {
+        std::rethrow_exception(ex);
+      }
+      else
+      {
+        throw exception{"Exception processing without current exception not possible. "
+                        "This function must be called from inside a catch handler"};
+      }
+    }
+    catch(const char str)
+    {
+      nested_string = std::format("{}Exception (char): {}\n", nested_string, str);
+    }
+    catch(const char* const str)
+    {
+      nested_string = std::format("{}Exception (char*): {}\n", nested_string, str);
+    }
+    catch(const short num)
+    {
+      nested_string = std::format("{}Exception (short): {}\n", nested_string, num);
+    }
+    catch(const int num)
+    {
+      nested_string = std::format("{}Exception (int): {}\n", nested_string, num);
+    }
+    catch(const float num)
+    {
+      nested_string = std::format("{}Exception (float): {}\n", nested_string, num);
+    }
+    catch(const double num)
+    {
+      nested_string = std::format("{}Exception (double): {}\n", nested_string, num);
+    }
+    catch(const exception_base& ex)
+    {
+      nested_string = std::format("{}{}", nested_string, ex.to_string());
+      std::rethrow_if_nested(ex);
+    }
+    catch(const std::bad_expected_access<std::string>& ex)
+    {
+      nested_string += std::format("std::bad_expected_access - Error: {}", ex.error());
+      std::rethrow_if_nested(ex);
+    }
+    catch(const std::bad_expected_access<void>& ex)
+    {
+      nested_string += std::format("std::bad_expected_access {}", ex.what());
+      std::rethrow_if_nested(ex);
+    }
+    catch(const std::system_error& ex)
+    {
+      nested_string += std::format("std::system_error: {} ({})", ex.what(), ex.code().value());
+      std::rethrow_if_nested(ex);
+    }
+    catch(const std::exception& ex)
+    {
+      nested_string += ex.what();
+      std::rethrow_if_nested(ex);
+    }
+    catch(...)
+    {
+      nested_string += "Unknown exception\n";
+    }
+  }
+  catch(...)
+  {
+    nested_string = std::format("{}\n\n{}", exception_report(), nested_string);
+  }
+
+  return nested_string;
+}
+
+///
+///
+inline auto exception_report(const std::exception_ptr& eptr) -> exception_string_t
+{
+  try
+  {
+    if(eptr != nullptr)
+    {
+      std::rethrow_exception(eptr);
+    }
+    else
+    {
+      throw exception{"Exception processing without exception ptr not possible. "
+                      "This function must be called with a valid exception_ptr"};
+    }
+  }
+  catch(...)
+  {
+    return exception_report();
+  }
+}
+
+} // namespace arude
