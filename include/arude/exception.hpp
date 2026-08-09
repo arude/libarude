@@ -12,24 +12,44 @@
 
 #include <concepts>
 #include <cstddef>
-#include <exception>
-#include <expected>
 #include <format>
 #include <source_location>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 #include <utility>
 
 // Out of the sorted group above because it is conditional: libc++ does not
 // implement <stacktrace> at any version, so the header has to be asked for
-// rather than assumed. __cpp_lib_stacktrace then distinguishes a standard
-// library that ships the header from one that also implements it.
-#if __has_include(<stacktrace>)
+// rather than assumed. __has_include and not ARUDE_EXCEPTION_HAS_STACKTRACE
+// below, because the feature test the latter reads only exists once the header
+// has been included.
+#if __has_include(<stacktrace>) && !(defined ARUDE_EXCEPTION_NO_STACKTRACE)
   #include <stacktrace>
-#endif // #if __has_include(<stacktrace>)
+#endif // #if __has_include(<stacktrace>) && !(defined ARUDE_EXCEPTION_NO_STACKTRACE)
+
+// Likewise conditional: std::runtime_error is only ever named as the configured
+// base below, so the default configuration does not pay for the header.
+#if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+  #include <stdexcept>
+#endif // #if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+
+// Whether a usable std::stacktrace is both present and wanted: the header
+// exists, the standard library actually implements it — __cpp_lib_stacktrace
+// distinguishes a library that ships <stacktrace> from one that also
+// implements it — and ARUDE_EXCEPTION_NO_STACKTRACE has not turned it off.
+//
+// Derived, not a knob. Set ARUDE_EXCEPTION_NO_STACKTRACE to opt out, and read
+// arude::stacktrace_available rather than this to branch in C++ rather than in
+// the preprocessor.
+//
+// 1 or 0 rather than defined or undefined, so that the negation is
+// `#if !ARUDE_EXCEPTION_HAS_STACKTRACE` and needs no second spelling.
+#if (defined __cpp_lib_stacktrace) && !(defined ARUDE_EXCEPTION_NO_STACKTRACE)
+  #define ARUDE_EXCEPTION_HAS_STACKTRACE 1
+#else
+  #define ARUDE_EXCEPTION_HAS_STACKTRACE 0
+#endif // #if (defined __cpp_lib_stacktrace) && !(defined ARUDE_EXCEPTION_NO_STACKTRACE)
 
 #if !(defined ARUDE_EXCEPTION_STACKTRACE_SKIP)
   #define ARUDE_EXCEPTION_STACKTRACE_SKIP 1
@@ -38,13 +58,6 @@
 #if !(defined ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH)
   #define ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH 10
 #endif // #if !(defined ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH)
-
-// Bounds the recursion in exception_report(). Ten levels of genuine nesting is
-// already pathological, so anything past this is a runaway rather than a
-// report that got cut short.
-#if !(defined ARUDE_EXCEPTION_REPORT_MAX_DEPTH)
-  #define ARUDE_EXCEPTION_REPORT_MAX_DEPTH 16
-#endif // #if !(defined ARUDE_EXCEPTION_REPORT_MAX_DEPTH)
 
 ///
 /// formatter specialization for std::source_location.
@@ -97,7 +110,7 @@ using std_runtime_error_base_t = std_runtime_error_noop_base;
 
 } // namespace arude::detail
 
-#if !(defined __cpp_lib_stacktrace)
+#if !ARUDE_EXCEPTION_HAS_STACKTRACE
 
 namespace arude::detail
 {
@@ -177,14 +190,14 @@ struct std::formatter<arude::detail::null_stacktrace> : formatter<string>
   }
 };
 
-#endif // #if !(defined __cpp_lib_stacktrace)
+#endif // #if !ARUDE_EXCEPTION_HAS_STACKTRACE
 
 // libstdc++ 13 ships <stacktrace> without the formatters the standard pairs
 // with it, and to_string is what those formatters are specified to write, so
 // supplying one here costs nothing in fidelity. __cpp_lib_formatters is the
 // feature test for exactly this pair, so the specialization disappears on a
 // standard library that has its own and cannot collide with it.
-#if (defined __cpp_lib_stacktrace) && !(defined __cpp_lib_formatters)
+#if ARUDE_EXCEPTION_HAS_STACKTRACE && !(defined __cpp_lib_formatters)
 
 ///
 /// formatter specialization for std::basic_stacktrace.
@@ -226,14 +239,14 @@ struct std::formatter<std::basic_stacktrace<Allocator>>
   }
 };
 
-#endif // #if (defined __cpp_lib_stacktrace) && !(defined __cpp_lib_formatters)
+#endif // #if ARUDE_EXCEPTION_HAS_STACKTRACE && !(defined __cpp_lib_formatters)
 
 namespace arude
 {
 
 using exception_string_t = std::string;
 
-#if (defined __cpp_lib_stacktrace)
+#if ARUDE_EXCEPTION_HAS_STACKTRACE
 
 ///
 /// Whether this platform can capture a stacktrace.
@@ -254,7 +267,7 @@ inline constexpr auto stacktrace_available = false;
 
 using exception_stacktrace_t = detail::null_stacktrace;
 
-#endif // #if (defined __cpp_lib_stacktrace)
+#endif // #if ARUDE_EXCEPTION_HAS_STACKTRACE
 
 ///
 /// Base class for arude exceptions containing message, source location and stacktrace.
@@ -514,7 +527,7 @@ exception(const char*, UD&&) -> exception<std::remove_cvref_t<UD>>;
 
 ///
 ///
-exception_base::exception_base(string_t str, source_location_t loc, stacktrace_t st)
+exception_base::exception_base(string_t str, const source_location_t loc, stacktrace_t st)
   : detail::std_runtime_error_base_t{str}
   , str_{std::move(str)}
   , loc_{loc}
@@ -560,8 +573,8 @@ auto exception_base::to_string() const -> string_t
 ///
 ///
 template<exception_user_data UD>
-exception<UD>::exception(string_t str, exception_user_data auto&& ud, source_location_t loc, stacktrace_t st)
-  : exception_base{std::move(str), std::move(loc), std::move(st)}
+exception<UD>::exception(string_t str, exception_user_data auto&& ud, const source_location_t loc, stacktrace_t st)
+  : exception_base{std::move(str), loc, std::move(st)}
   , data_{std::forward<decltype(ud)>(ud)}
 {
 }
@@ -639,230 +652,3 @@ struct std::formatter<arude::exception_base> : formatter<string>
 {
   auto format(const auto& val, auto& ctx) const { return format_to(ctx.out(), "{}", val.to_string()); }
 };
-
-namespace arude::detail
-{
-
-///
-/// Bounds the recursion depth of arude::exception_report().
-/// exception_report() recurses to walk a chain of nested exceptions, and it
-/// makes that recursive call from a catch handler which also catches whatever
-/// the report building itself throws. That pairing has no natural end: if
-/// formatting throws std::bad_alloc, the handler catches it, reports it, and
-/// formats again. A cyclic nesting chain arrives at the same place by another
-/// route, and a merely deep one exhausts the stack. Counting the levels and
-/// refusing to go further is the only exit that covers all three.
-///
-/// The count is per thread, since two threads may be reporting unrelated
-/// exceptions at the same time.
-///
-// A limit below one would make the outermost report truncate itself, turning
-// every report into the truncation note. Catch that at the point of override
-// rather than leaving it to be puzzled over at runtime.
-static_assert(ARUDE_EXCEPTION_REPORT_MAX_DEPTH >= 1, "ARUDE_EXCEPTION_REPORT_MAX_DEPTH must be at least 1.");
-
-class exception_report_guard final
-{
-public: // Structors / Operators
-  ///
-  /// Enters one level of the report, which is left again on destruction.
-  ///
-  exception_report_guard();
-
-  ///
-  /// Leaves the level entered by the constructor.
-  ///
-  ~exception_report_guard();
-
-  exception_report_guard(const exception_report_guard&) = delete;
-  exception_report_guard(exception_report_guard&&) = delete;
-  auto operator=(const exception_report_guard&) -> exception_report_guard& = delete;
-  auto operator=(exception_report_guard&&) -> exception_report_guard& = delete;
-
-public: // Accessors
-  ///
-  /// Reports whether this level is past the limit.
-  /// \return true if the report must stop rather than recurse again.
-  ///
-  [[nodiscard]] auto exhausted() const -> bool;
-
-private: // Data
-  static inline thread_local std::size_t depth_ = 0;
-
-  // The depth this guard entered at. Held per instance rather than read back
-  // from depth_, so a guard reports on its own level and not on whatever a
-  // deeper call happens to have left behind.
-  std::size_t level_;
-};
-
-///
-///
-inline exception_report_guard::exception_report_guard()
-  : level_{++depth_}
-{
-}
-
-///
-///
-inline exception_report_guard::~exception_report_guard()
-{
-  --depth_;
-}
-
-///
-///
-inline auto exception_report_guard::exhausted() const -> bool
-{
-  return level_ > ARUDE_EXCEPTION_REPORT_MAX_DEPTH;
-}
-
-} // namespace arude::detail
-
-namespace arude
-{
-
-///
-/// Creates an exception report as string by reading all known exception types and unwinding nested exceptions.
-/// Must be called from inside a catch handler; with no exception in flight the report says so instead of failing.
-///
-/// Nested exceptions are unwound by recursion, bounded by ARUDE_EXCEPTION_REPORT_MAX_DEPTH. Past that the report
-/// stops and ends with a note saying it was truncated, rather than recursing until the stack is gone.
-///
-/// \return The exception report as string, truncated if the depth limit was reached.
-/// \throws std::bad_alloc If the report string cannot be allocated. Callers in a catch(...) handler that must not
-///         throw should guard the call accordingly.
-///
-[[nodiscard]] auto exception_report() -> exception_string_t;
-
-///
-/// Calls exception_report() with a given exception pointer and returns the report as string.
-/// This function is useful when you have an exception pointer and want to generate a report without rethrowing the
-/// exception.
-///
-/// \param eptr Exception pointer.
-/// \return String containing the exception information, truncated if the depth limit was reached.
-/// \throws std::bad_alloc If the report string cannot be allocated.
-///
-[[nodiscard]] auto exception_report(const std::exception_ptr& eptr) -> exception_string_t;
-
-///
-///
-// The recursion is the mechanism for unwinding nested exceptions, not an
-// oversight; exception_report_guard is what bounds it.
-// NOLINTNEXTLINE(misc-no-recursion)
-inline auto exception_report() -> exception_string_t
-{
-  const auto guard = detail::exception_report_guard{};
-
-  if(guard.exhausted())
-  {
-    return "Exception report truncated: nesting depth limit reached\n";
-  }
-
-  auto nested_string = exception_string_t{};
-
-  try
-  {
-    try
-    {
-      if(auto ex = std::current_exception())
-      {
-        std::rethrow_exception(ex);
-      }
-      else
-      {
-        throw exception{"Exception processing without current exception not possible. "
-                        "This function must be called from inside a catch handler"};
-      }
-    }
-    catch(const char str)
-    {
-      nested_string = std::format("{}Exception (char): {}\n", nested_string, str);
-    }
-    catch(const char* const str)
-    {
-      nested_string = std::format("{}Exception (char*): {}\n", nested_string, str);
-    }
-    catch(const short num)
-    {
-      nested_string = std::format("{}Exception (short): {}\n", nested_string, num);
-    }
-    catch(const int num)
-    {
-      nested_string = std::format("{}Exception (int): {}\n", nested_string, num);
-    }
-    catch(const float num)
-    {
-      nested_string = std::format("{}Exception (float): {}\n", nested_string, num);
-    }
-    catch(const double num)
-    {
-      nested_string = std::format("{}Exception (double): {}\n", nested_string, num);
-    }
-    catch(const exception_base& ex)
-    {
-      nested_string = std::format("{}{}", nested_string, ex.to_string());
-      std::rethrow_if_nested(ex);
-    }
-// <expected> exists as a header on toolchains that do not implement it, so the
-// include alone proves nothing; this is the feature test that does. Where it is
-// missing the handlers simply go, and such an exception falls through to the
-// std::exception branch below rather than being reported by its own name.
-#if (defined __cpp_lib_expected)
-    catch(const std::bad_expected_access<std::string>& ex)
-    {
-      nested_string += std::format("std::bad_expected_access - Error: {}", ex.error());
-      std::rethrow_if_nested(ex);
-    }
-    catch(const std::bad_expected_access<void>& ex)
-    {
-      nested_string += std::format("std::bad_expected_access {}", ex.what());
-      std::rethrow_if_nested(ex);
-    }
-#endif // #if (defined __cpp_lib_expected)
-    catch(const std::system_error& ex)
-    {
-      nested_string += std::format("std::system_error: {} ({})", ex.what(), ex.code().value());
-      std::rethrow_if_nested(ex);
-    }
-    catch(const std::exception& ex)
-    {
-      nested_string += ex.what();
-      std::rethrow_if_nested(ex);
-    }
-    catch(...)
-    {
-      nested_string += "Unknown exception\n";
-    }
-  }
-  catch(...)
-  {
-    nested_string = std::format("{}\n\n{}", exception_report(), nested_string);
-  }
-
-  return nested_string;
-}
-
-///
-///
-inline auto exception_report(const std::exception_ptr& eptr) -> exception_string_t
-{
-  try
-  {
-    if(eptr != nullptr)
-    {
-      std::rethrow_exception(eptr);
-    }
-    else
-    {
-      throw exception{"Exception processing without exception ptr not possible. "
-                      "This function must be called with a valid exception_ptr"};
-    }
-  }
-  catch(...)
-  {
-    return exception_report();
-  }
-}
-
-} // namespace arude

@@ -14,6 +14,7 @@
 // violation no amount of care inside the file would fix.
 
 #include "arude/exception.hpp"
+#include "arude/exception_report.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
