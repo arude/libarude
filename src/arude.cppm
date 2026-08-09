@@ -24,6 +24,7 @@ module;
 // Everything the headers need has to be included here. An include in the
 // purview would re-declare all of std as module-attached.
 #include "arude/exception.hpp"
+#include "arude/exception_report.hpp"
 #include "arude/hello_world.hpp"
 #include "arude/type_name.hpp"
 

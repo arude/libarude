@@ -14,7 +14,10 @@
 /// individual headers where compile time matters.
 ///
 
+#include "arude/exception.hpp"
+#include "arude/exception_report.hpp"
 #include "arude/hello_world.hpp"
+#include "arude/type_name.hpp"
 
 ///
 /// Root namespace for everything libarude provides.
