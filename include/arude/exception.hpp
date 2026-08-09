@@ -34,15 +34,17 @@
   #include <stdexcept>
 #endif // #if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
 
-// Whether a usable std::stacktrace is both present and wanted: the header
-// exists, the standard library actually implements it — __cpp_lib_stacktrace
-// distinguishes a library that ships <stacktrace> from one that also
-// implements it — and ARUDE_EXCEPTION_NO_STACKTRACE has not turned it off.
-//
-// Derived, not a knob. Set ARUDE_EXCEPTION_NO_STACKTRACE to opt out, and read
-// arude::stacktrace_available rather than this to branch in C++ rather than in
-// the preprocessor.
-//
+///
+/// 1 where a usable std::stacktrace is both present and wanted, 0 otherwise.
+/// The header exists, the standard library actually implements it —
+/// __cpp_lib_stacktrace distinguishes a library that ships \<stacktrace\> from
+/// one that also implements it — and ARUDE_EXCEPTION_NO_STACKTRACE has not
+/// turned it off.
+///
+/// Derived, not a knob. Define ARUDE_EXCEPTION_NO_STACKTRACE to opt out, and
+/// read arude::stacktrace_available rather than this to branch in C++ rather
+/// than in the preprocessor.
+///
 // 1 or 0 rather than defined or undefined, so that the negation is
 // `#if !ARUDE_EXCEPTION_HAS_STACKTRACE` and needs no second spelling.
 #if (defined __cpp_lib_stacktrace) && !(defined ARUDE_EXCEPTION_NO_STACKTRACE)
@@ -51,10 +53,20 @@
   #define ARUDE_EXCEPTION_HAS_STACKTRACE 0
 #endif // #if (defined __cpp_lib_stacktrace) && !(defined ARUDE_EXCEPTION_NO_STACKTRACE)
 
+///
+/// Innermost frames left out of a captured stacktrace, so a trace starts at the throw site.
+/// Defaults to 1, which drops the exception constructor itself. Define it
+/// ahead of this header to override.
+///
 #if !(defined ARUDE_EXCEPTION_STACKTRACE_SKIP)
   #define ARUDE_EXCEPTION_STACKTRACE_SKIP 1
 #endif // #if !(defined ARUDE_EXCEPTION_STACKTRACE_SKIP)
 
+///
+/// Most frames captured into an exception's stacktrace.
+/// Defaults to 10. Capturing is not free, so this bounds what every throw
+/// pays. Define it ahead of this header to override.
+///
 #if !(defined ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH)
   #define ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH 10
 #endif // #if !(defined ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH)
@@ -104,6 +116,9 @@ struct std_runtime_error_noop_base
   explicit std_runtime_error_noop_base([[maybe_unused]] std::string_view str) {}
 };
 
+///
+/// \see std_runtime_error_base_t
+///
 using std_runtime_error_base_t = std_runtime_error_noop_base;
 
 #endif // #if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
@@ -117,7 +132,7 @@ namespace arude::detail
 
 ///
 /// Stand-in for std::stacktrace where the standard library has none.
-/// libc++ does not implement <stacktrace>, so on that platform the choice is
+/// libc++ does not implement \<stacktrace\>, so on that platform the choice is
 /// between a stand-in and no arude::exception at all. It holds no frames and
 /// says as much when formatted, which is the honest answer: nothing here can
 /// produce a trace. arude::stacktrace_available tells a caller which of the
@@ -126,6 +141,9 @@ namespace arude::detail
 class null_stacktrace final
 {
 public: // Typedefs
+  ///
+  /// Frame count and index type, matching std::stacktrace's.
+  ///
   using size_type = std::size_t;
 
 public: // Accessors
@@ -244,18 +262,27 @@ struct std::formatter<std::basic_stacktrace<Allocator>>
 namespace arude
 {
 
+///
+/// String type every arude exception carries its message and reports in.
+///
 using exception_string_t = std::string;
 
 #if ARUDE_EXCEPTION_HAS_STACKTRACE
 
 ///
 /// Whether this platform can capture a stacktrace.
-/// False where the standard library has no working <stacktrace>, in which case
-/// exception_base still carries a stack() and it is always empty. Branch on
-/// this rather than on a compiler or platform macro.
+/// False where the standard library has no working \<stacktrace\>, in which
+/// case exception_base still carries a stack() and it is always empty. Branch
+/// on this rather than on a compiler or platform macro.
 ///
 inline constexpr auto stacktrace_available = true;
 
+///
+/// Stacktrace type every arude exception captures at the throw site.
+/// std::stacktrace where the standard library has a working one, and
+/// detail::null_stacktrace where it has not. arude::stacktrace_available says
+/// which; the interface is the same either way.
+///
 using exception_stacktrace_t = std::stacktrace;
 
 #else
@@ -265,6 +292,9 @@ using exception_stacktrace_t = std::stacktrace;
 ///
 inline constexpr auto stacktrace_available = false;
 
+///
+/// \see exception_stacktrace_t
+///
 using exception_stacktrace_t = detail::null_stacktrace;
 
 #endif // #if ARUDE_EXCEPTION_HAS_STACKTRACE
@@ -281,8 +311,19 @@ using exception_stacktrace_t = detail::null_stacktrace;
 class exception_base : public detail::std_runtime_error_base_t
 {
 public: // Typedefs / Constants
+  ///
+  /// \see arude::exception_string_t
+  ///
   using string_t = exception_string_t;
+
+  ///
+  /// Type recording where the exception was constructed.
+  ///
   using source_location_t = std::source_location;
+
+  ///
+  /// \see arude::exception_stacktrace_t
+  ///
   using stacktrace_t = exception_stacktrace_t;
 
 public: // Structors / Operators
@@ -397,6 +438,9 @@ template<exception_user_data UD = void>
 class exception : public exception_base
 {
 public: // Typedefs
+  ///
+  /// The payload type this exception carries, as passed for UD.
+  ///
   using user_data_t = UD;
 
 public: // Structors
@@ -470,10 +514,19 @@ private: // Variables
   user_data_t data_;
 };
 
+///
+/// Arude exception with no user data payload, which is the default.
+/// A separate specialization because the general template holds its payload by
+/// value and void is not a type that can be held. It therefore has no data()
+/// and inherits exception_base's constructors unchanged.
+///
 template<>
 class exception<void> : public exception_base
 {
 public: // Typedefs
+  ///
+  /// Always void here, so that generic code can ask any exception what it carries.
+  ///
   using user_data_t = void;
 
 public: // Structors
@@ -515,13 +568,27 @@ private: // Overrides
   [[nodiscard]] inline auto do_to_string() const -> string_t override;
 };
 
-// CTAD guide for exception<void> - deduce void when only string-like argument is provided
+///
+/// Deduces exception<void> from a message alone, so `exception{"failed"}` needs no argument list.
+///
 exception(exception_base::string_t) -> exception<void>;
+
+///
+/// \see exception(exception_base::string_t) -> exception<void>
+///
 exception(const char*) -> exception<void>;
 
-// CTAD guide for exception<UD> - deduce UD from the user data argument
+///
+/// Deduces the payload type from the second argument, stripped of reference and cv-qualification.
+/// \tparam UD Deduced payload type.
+///
 template<exception_user_data UD>
 exception(exception_base::string_t, UD&&) -> exception<std::remove_cvref_t<UD>>;
+
+///
+/// \see exception(exception_base::string_t, UD&&) -> exception<std::remove_cvref_t<UD>>
+/// \tparam UD Deduced payload type.
+///
 template<exception_user_data UD>
 exception(const char*, UD&&) -> exception<std::remove_cvref_t<UD>>;
 
@@ -650,5 +717,8 @@ auto exception<void>::do_to_string() const -> string_t
 template<>
 struct std::formatter<arude::exception_base> : formatter<string>
 {
+  ///
+  /// Writes what to_string() produces, so a derived exception formats as itself.
+  ///
   auto format(const auto& val, auto& ctx) const { return format_to(ctx.out(), "{}", val.to_string()); }
 };

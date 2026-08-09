@@ -13,8 +13,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <exception>
+#include <expected>
 #include <format>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 
 namespace
@@ -153,6 +155,68 @@ SCENARIO("exception_report describes standard library exceptions", "[exception_r
     }
   }
 }
+
+// Guarded exactly as the handlers are: <expected> exists as a header on
+// toolchains that do not implement it, so the include alone proves nothing.
+// Where the feature test is missing these exceptions fall through to the
+// std::exception handler instead, and there is no dedicated behaviour to pin.
+#if (defined __cpp_lib_expected)
+
+SCENARIO("exception_report describes a bad_expected_access", "[exception_report]")
+{
+  GIVEN("an expected holding a string error")
+  {
+    WHEN("its value is taken and the throw is reported")
+    {
+      auto report = arude::exception_string_t{};
+
+      try
+      {
+        const auto result = std::expected<int, std::string>{std::unexpect, "disk on fire"};
+        static_cast<void>(result.value());
+      }
+      catch(...)
+      {
+        report = arude::exception_report();
+      }
+
+      THEN("the report names the type and carries the error itself")
+      {
+        REQUIRE(report.contains("std::bad_expected_access"));
+        REQUIRE(report.contains("disk on fire"));
+      }
+    }
+  }
+
+  // The handlers are ordered <std::string> before <void>, and every
+  // bad_expected_access<E> derives from bad_expected_access<void>. An error
+  // type that is not std::string is what reaches the second handler, and
+  // nothing else in the suite gets there.
+  GIVEN("an expected whose error type is not a string")
+  {
+    WHEN("its value is taken and the throw is reported")
+    {
+      auto report = arude::exception_string_t{};
+
+      try
+      {
+        const auto result = std::expected<int, int>{std::unexpect, 42};
+        static_cast<void>(result.value());
+      }
+      catch(...)
+      {
+        report = arude::exception_report();
+      }
+
+      THEN("the void handler names it rather than letting it fall through as a plain std::exception")
+      {
+        REQUIRE(report.contains("std::bad_expected_access"));
+      }
+    }
+  }
+}
+
+#endif // #if (defined __cpp_lib_expected)
 
 SCENARIO("exception_report copes with an unrecognised exception", "[exception_report]")
 {

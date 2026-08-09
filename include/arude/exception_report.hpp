@@ -24,9 +24,13 @@
 #include <string>
 #include <system_error>
 
-// Bounds the recursion in exception_report(). Ten levels of genuine nesting is
-// already pathological, so anything past this is a runaway rather than a
-// report that got cut short.
+///
+/// Most levels of nested exception arude::exception_report() will unwind.
+/// Defaults to 16. Ten levels of genuine nesting is already pathological, so
+/// anything past this is a runaway rather than a report that got cut short;
+/// the report stops there and says it was truncated. Define it ahead of this
+/// header to override. Must be at least 1.
+///
 #if !(defined ARUDE_EXCEPTION_REPORT_MAX_DEPTH)
   #define ARUDE_EXCEPTION_REPORT_MAX_DEPTH 16
 #endif // #if !(defined ARUDE_EXCEPTION_REPORT_MAX_DEPTH)
