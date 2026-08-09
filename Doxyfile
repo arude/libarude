@@ -32,6 +32,12 @@ WARN_IF_UNDOCUMENTED   = YES
 WARN_AS_ERROR          = NO
 WARN_LOGFILE           = docs/warnings.log
 
+# libarude specializes std::formatter for several of its types. Without this
+# doxygen has never heard of namespace std, so it cannot place the
+# specializations and reports "scope for class std::formatter not found" on
+# each one.
+BUILTIN_STL_SUPPORT    = YES
+
 # The conventions put the brief on the first line of the block.
 JAVADOC_AUTOBRIEF      = YES
 QT_AUTOBRIEF           = YES

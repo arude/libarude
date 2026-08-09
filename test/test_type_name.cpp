@@ -143,6 +143,39 @@ SCENARIO("extract_type_name reads a compiler signature", "[type_name]")
       }
     }
   }
+
+  // The prefix is what the parser looks for first. Finding it and then failing
+  // is a separate path from not finding it at all, and it is the one that would
+  // read past the end of the name if it did not bail out.
+  GIVEN("a signature carrying the prefix but neither a semicolon nor a terminator")
+  {
+    const auto signature = std::string_view{"void arude::type_name() T = int"};
+
+    WHEN("it is parsed")
+    {
+      const auto name = arude::detail::extract_type_name(signature, "T = ", "]");
+
+      THEN("the whole signature comes back rather than a truncated name")
+      {
+        REQUIRE(name == signature);
+      }
+    }
+  }
+
+  GIVEN("a signature whose terminator sits before the prefix")
+  {
+    const auto signature = std::string_view{"] void arude::type_name() T = int"};
+
+    WHEN("it is parsed")
+    {
+      const auto name = arude::detail::extract_type_name(signature, "T = ", "]");
+
+      THEN("the whole signature comes back rather than a reversed range")
+      {
+        REQUIRE(name == signature);
+      }
+    }
+  }
 }
 
 SCENARIO("strip_elaborated_specifier normalises msvc type names", "[type_name]")

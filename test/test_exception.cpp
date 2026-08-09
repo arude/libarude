@@ -35,12 +35,36 @@ struct opaque_payload
   int value = 0;
 };
 
+///
+/// Payload that is formattable but whose formatter always throws.
+/// Formatting is the one thing to_string does, so this is what drives it into
+/// its catch(...); nothing a caller can pass will otherwise get there.
+///
+struct throwing_payload
+{
+  int value = 0;
+};
+
 } // namespace
 
 template<>
 struct std::formatter<formattable_payload> : formatter<string>
 {
   auto format(const auto& val, auto& ctx) const { return format_to(ctx.out(), "payload({})", val.value); }
+};
+
+// The context stays a deduced parameter, and the return type is spelled from
+// it: std::formattable checks format() against a context type that need not be
+// std::format_context, and a signature naming that type outright fails the
+// concept, which silently takes the payload down the not-formattable branch
+// instead of the one under test.
+template<>
+struct std::formatter<throwing_payload> : formatter<string>
+{
+  auto format([[maybe_unused]] const throwing_payload& val, auto& ctx) const -> decltype(ctx.out())
+  {
+    throw format_error{"throwing_payload has no representation"};
+  }
 };
 
 SCENARIO("exception_base carries message, location and stacktrace", "[exception]")
@@ -148,6 +172,25 @@ SCENARIO("exception carries a user data payload", "[exception]")
     {
       REQUIRE(ex.data().value == 7);
       REQUIRE(ex.to_string().contains("not formattable"));
+    }
+  }
+
+  // to_string is called from arude::exception_report(), which runs inside a
+  // catch handler. A second exception escaping there would replace a
+  // diagnostic with a std::terminate, so the fallback is load-bearing.
+  GIVEN("a payload whose formatter throws")
+  {
+    const auto ex = arude::exception{"failed", throwing_payload{1}};
+
+    THEN("to_string reports the formatting failure instead of propagating it")
+    {
+      REQUIRE_NOTHROW(ex.to_string());
+      REQUIRE(ex.to_string() == "Error formatting exception details");
+    }
+
+    THEN("formatting through the base is equally safe, since it goes the same way")
+    {
+      REQUIRE_NOTHROW(std::format("{}", static_cast<const arude::exception_base&>(ex)));
     }
   }
 
