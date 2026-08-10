@@ -27,6 +27,18 @@
 
 import arude;
 
+namespace module_test
+{
+
+///
+/// Derived from the exported base, which is the only way to find out whether
+/// the class itself came across rather than just the alias naming it.
+///
+class widget final : public arude::noncopyable
+{};
+
+} // namespace module_test
+
 SCENARIO("the module exports the public interface", "[module]")
 {
   GIVEN("nothing imported but arude")
@@ -46,6 +58,19 @@ SCENARIO("the module exports the public interface", "[module]")
     THEN("hello_world is reachable, so out-of-line definitions link")
     {
       REQUIRE(arude::hello_world(42) == 42);
+    }
+  }
+
+  // A base class is only exported usefully if it can be derived from, which
+  // needs the class reachable and not merely the alias that names it.
+  GIVEN("a type derived from the exported noncopyable")
+  {
+    THEN("the copy members are gone and the move members are not")
+    {
+      STATIC_REQUIRE(!std::is_copy_constructible_v<module_test::widget>);
+      STATIC_REQUIRE(!std::is_copy_assignable_v<module_test::widget>);
+      STATIC_REQUIRE(std::is_move_constructible_v<module_test::widget>);
+      STATIC_REQUIRE(std::is_move_assignable_v<module_test::widget>);
     }
   }
 }

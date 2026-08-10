@@ -26,6 +26,7 @@ module;
 #include "arude/exception.hpp"
 #include "arude/exception_report.hpp"
 #include "arude/hello_world.hpp"
+#include "arude/noncopyable.hpp"
 #include "arude/type_name.hpp"
 
 export module arude;
@@ -67,6 +68,7 @@ using ::arude::exception_stacktrace_t;
 using ::arude::exception_string_t;
 using ::arude::exception_user_data;
 using ::arude::hello_world;
+using ::arude::noncopyable;
 using ::arude::stacktrace_available;
 using ::arude::type_name;
 
