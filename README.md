@@ -88,8 +88,11 @@ xdg-open docs/html/index.html
 Graphviz is optional. With it you additionally get inheritance and dependency
 diagrams; without it everything else is unchanged.
 
-Undocumented public API is written to `docs/warnings.log` rather than failing
-the run. CI builds the site on every push and uploads it as an artifact.
+Undocumented public API is written to `docs/warnings.log` rather than stopping
+the run, so the site is produced either way. The log is advisory locally, as
+clang-tidy's warnings are; CI fails the docs job when it is not empty, which
+holds the baseline at zero. The site is uploaded as an artifact on every push,
+including when that check fails.
 
 ### Static analysis
 
