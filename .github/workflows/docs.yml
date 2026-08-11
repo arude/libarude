@@ -27,18 +27,23 @@ jobs:
       - name: Generate
         run: doxygen Doxyfile
 
-      # Undocumented public API is a warning, not a failure, so it does not
-      # block a branch mid-refactor. Surfaced here so it stays visible.
-      - name: Report undocumented API
+      # The baseline is zero warnings, so anything in the log is a regression
+      # rather than background noise and fails the job. Checked here rather than
+      # with WARN_AS_ERROR so the site is still generated in full: the log gets
+      # printed with the failure, and the artifact below still uploads.
+      - name: Check for undocumented API
         run: |
           if [ -s docs/warnings.log ]; then
-            echo "::warning::Doxygen reported undocumented API:"
+            echo "::error::Doxygen reported undocumented API:"
             cat docs/warnings.log
-          else
-            echo "No documentation warnings."
+            exit 1
           fi
+          echo "No documentation warnings."
 
+      # Runs even when the check above failed, since that is exactly when the
+      # generated site is worth looking at.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: html-docs
           path: docs/html

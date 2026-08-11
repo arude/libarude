@@ -54,6 +54,14 @@ option(ARUDE_ENABLE_COVERAGE "Build with coverage instrumentation" OFF)
 
 include(cmake/CPM.cmake)
 
+# The enum helpers are built on magic_enum. Unlike Catch2 and Google Benchmark
+# below it is not optional: it is a dependency of the library itself, so it is
+# fetched before any target is created rather than behind a feature switch.
+#
+# Its examples, tests and install rules key off whether it is the top-level
+# project, so as a subproject they are already off and need no overriding here.
+CPMAddPackage("gh:Neargye/magic_enum@0.9.8")
+
 # ---- Add source files ----
 
 # Note: globbing sources is considered bad practice as CMake's generators may not detect new files
@@ -85,6 +93,10 @@ endif()
 if(ARUDE_STACKTRACE_LIBRARY)
   target_link_libraries(${PROJECT_NAME} PUBLIC ${ARUDE_STACKTRACE_LIBRARY})
 endif()
+
+# PUBLIC for the same reason: magic_enum is header-only, and a header of ours
+# that includes it puts it on every consumer's include path too.
+target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
 
 target_include_directories(
   ${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
