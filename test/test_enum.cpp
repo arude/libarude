@@ -73,6 +73,17 @@ SCENARIO("enum_cast_throw converts an underlying integer", "[enum]")
       STATIC_REQUIRE(arude::enum_cast_throw<colour>(0) == colour::red);
       STATIC_REQUIRE(arude::enum_cast_throw<colour>(2) == colour::blue);
     }
+
+    // STATIC_REQUIRE is a static_assert: it proves the conversion at compile
+    // time and emits no code, so the returning branch stays unexecuted and
+    // coverage reports it as a gap. Calling it here is what closes that, and
+    // the argument goes through a variable so the call cannot be folded away.
+    THEN("the enumerator comes back at run time too")
+    {
+      const auto value = 1;
+
+      REQUIRE(arude::enum_cast_throw<colour>(value) == colour::green);
+    }
   }
 
   GIVEN("an integer matching no enumerator")
@@ -101,6 +112,15 @@ SCENARIO("enum_cast_throw converts an underlying integer", "[enum]")
   // as whichever character has that code rather than as the number.
   GIVEN("an enumeration with a character-like underlying type")
   {
+    // A second instantiation of the same template, so its returning branch is
+    // counted separately from colour's and needs its own run-time call.
+    THEN("a valid value converts at run time")
+    {
+      const auto value = static_cast<unsigned char>(1);
+
+      REQUIRE(arude::enum_cast_throw<enum_test::status>(value) == enum_test::status::ok);
+    }
+
     THEN("the message still reports the value as a number")
     {
       try
@@ -139,6 +159,14 @@ SCENARIO("enum_cast_throw converts a name", "[enum]")
     THEN("case_insensitive accepts it, so the predicate reaches enum_cast")
     {
       REQUIRE(arude::enum_cast_throw<colour>("GREEN", arude::case_insensitive) == colour::green);
+    }
+
+    // Passing the predicate instantiates the template a second time, and that
+    // instantiation only ever succeeded above, leaving its throwing branch
+    // unexecuted. A name that matches under no comparison reaches it.
+    THEN("case_insensitive still throws on a name that matches nothing")
+    {
+      REQUIRE_THROWS_AS(arude::enum_cast_throw<colour>("puce", arude::case_insensitive), arude::exception_base);
     }
   }
 
