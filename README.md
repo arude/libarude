@@ -14,9 +14,14 @@ A utility and helper library for C++ projects.
 ## Building
 
 Requires CMake 4.2 or newer, Ninja, and a C++23-capable compiler — Clang 21 is
-what the project is developed against. The first configure downloads Catch2
-through [CPM](https://github.com/cpm-cmake/CPM.cmake), so it needs network
-access; later ones do not.
+what the project is developed against. The first configure downloads
+[magic_enum](https://github.com/Neargye/magic_enum) and Catch2 through
+[CPM](https://github.com/cpm-cmake/CPM.cmake), so it needs network access; later
+ones do not.
+
+Of the two, magic_enum is header-only and MIT licensed, and unlike the test and
+benchmark dependencies it is part of the library itself: consumers of the enum
+helpers get its headers on their include path.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
