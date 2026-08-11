@@ -428,13 +428,13 @@ private: // Variables
 /// \tparam UD User data type.
 ///
 template<typename UD>
-concept exception_user_data = std::copy_constructible<UD> || std::move_constructible<UD> || std::is_void_v<UD>;
+concept exception_user_data_c = std::copy_constructible<UD> || std::move_constructible<UD> || std::is_void_v<UD>;
 
 ///
 /// Arude exception with user data payload.
 /// \tparam UD User data type (default = void).
 ///
-template<exception_user_data UD = void>
+template<exception_user_data_c UD = void>
 class exception : public exception_base
 {
 public: // Typedefs
@@ -454,7 +454,7 @@ public: // Structors
   ///
   exception(
     string_t str,
-    exception_user_data auto&& ud,
+    exception_user_data_c auto&& ud,
     source_location_t loc = source_location_t::current(),
     stacktrace_t st = stacktrace_t::current(ARUDE_EXCEPTION_STACKTRACE_SKIP, ARUDE_EXCEPTION_STACKTRACE_MAX_DEPTH));
 
@@ -582,14 +582,14 @@ exception(const char*) -> exception<void>;
 /// Deduces the payload type from the second argument, stripped of reference and cv-qualification.
 /// \tparam UD Deduced payload type.
 ///
-template<exception_user_data UD>
+template<exception_user_data_c UD>
 exception(exception_base::string_t, UD&&) -> exception<std::remove_cvref_t<UD>>;
 
 ///
 /// \see exception(exception_base::string_t, UD&&) -> exception<std::remove_cvref_t<UD>>
 /// \tparam UD Deduced payload type.
 ///
-template<exception_user_data UD>
+template<exception_user_data_c UD>
 exception(const char*, UD&&) -> exception<std::remove_cvref_t<UD>>;
 
 ///
@@ -639,8 +639,8 @@ auto exception_base::to_string() const -> string_t
 
 ///
 ///
-template<exception_user_data UD>
-exception<UD>::exception(string_t str, exception_user_data auto&& ud, const source_location_t loc, stacktrace_t st)
+template<exception_user_data_c UD>
+exception<UD>::exception(string_t str, exception_user_data_c auto&& ud, const source_location_t loc, stacktrace_t st)
   : exception_base{std::move(str), loc, std::move(st)}
   , data_{std::forward<decltype(ud)>(ud)}
 {
@@ -648,7 +648,7 @@ exception<UD>::exception(string_t str, exception_user_data auto&& ud, const sour
 
 ///
 ///
-template<exception_user_data UD>
+template<exception_user_data_c UD>
 constexpr auto exception<UD>::data() const -> const user_data_t&
 {
   return data_;
@@ -656,7 +656,7 @@ constexpr auto exception<UD>::data() const -> const user_data_t&
 
 ///
 ///
-template<exception_user_data UD>
+template<exception_user_data_c UD>
 constexpr auto exception<UD>::data() -> user_data_t&
 {
   return data_;
@@ -664,7 +664,7 @@ constexpr auto exception<UD>::data() -> user_data_t&
 
 ///
 ///
-template<exception_user_data UD>
+template<exception_user_data_c UD>
 auto exception<UD>::do_to_string() const -> string_t
 {
   try

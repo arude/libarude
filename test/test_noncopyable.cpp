@@ -71,7 +71,7 @@ public:
 // declaration of that name, so an unqualified call succeeds exactly when the
 // argument's type drags namespace arude in with it.
 template<typename T>
-concept adl_reaches_arude = requires(const T& value) { adl_probe(value); };
+concept adl_reaches_arude_c = requires(const T& value) { adl_probe(value); };
 
 ///
 ///
@@ -255,7 +255,7 @@ SCENARIO("deriving from noncopyable does not drag namespace arude into ADL", "[n
   {
     THEN("ADL reaches the namespace, so the probe is capable of finding a name there")
     {
-      STATIC_REQUIRE(noncopyable_test::adl_reaches_arude<arude::adl_control>);
+      STATIC_REQUIRE(noncopyable_test::adl_reaches_arude_c<arude::adl_control>);
     }
   }
 
@@ -263,8 +263,8 @@ SCENARIO("deriving from noncopyable does not drag namespace arude into ADL", "[n
   {
     THEN("ADL does not reach namespace arude")
     {
-      STATIC_REQUIRE(!noncopyable_test::adl_reaches_arude<noncopyable_test::widget>);
-      STATIC_REQUIRE(!noncopyable_test::adl_reaches_arude<noncopyable_test::private_widget>);
+      STATIC_REQUIRE(!noncopyable_test::adl_reaches_arude_c<noncopyable_test::widget>);
+      STATIC_REQUIRE(!noncopyable_test::adl_reaches_arude_c<noncopyable_test::private_widget>);
     }
   }
 
@@ -272,7 +272,7 @@ SCENARIO("deriving from noncopyable does not drag namespace arude into ADL", "[n
   {
     THEN("it too is associated with the nested namespace rather than arude")
     {
-      STATIC_REQUIRE(!noncopyable_test::adl_reaches_arude<arude::noncopyable>);
+      STATIC_REQUIRE(!noncopyable_test::adl_reaches_arude_c<arude::noncopyable>);
     }
   }
 }

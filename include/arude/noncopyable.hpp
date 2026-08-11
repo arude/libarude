@@ -76,6 +76,15 @@ protected: // Operators
 
 } // namespace non_copyable_
 
+///
+/// The name to inherit from: arude::noncopyable.
+/// The class itself is declared one namespace deeper so that deriving from it
+/// does not pull arude into the derived class's ADL set; this alias is what
+/// makes that arrangement invisible to a consumer, which names and inherits
+/// arude::noncopyable and never mentions non_copyable_ at all.
+///
+/// \see arude::non_copyable_::noncopyable
+///
 // NOLINTNEXTLINE(readability-identifier-naming): a _t suffix would rename the type consumers inherit from.
 using noncopyable = non_copyable_::noncopyable;
 

@@ -17,6 +17,8 @@ cleaner interface, take the interface.
 - Functions read as commands: `create_instance()`, `do_start()`.
 - Private and protected data members take a trailing underscore: `counter_`.
 - Type aliases end in `_t`, as in the STL: `value_vec_t`.
+- Concepts end in `_c`, for the same reason `_t` exists: `enum_c`, and a
+  constrained parameter then reads `template<enum_c E>`.
 - Template parameters are `CamelCase` — `T`, `Allocator`, `TFirstParameter`.
   The one exception to `snake_case`, so a parameter is distinguishable from a
   concrete type where it is used.
@@ -198,6 +200,9 @@ inline auto counter::value() const -> std::size_t
   `dynamic_cast` rarely, as needing it suggests a design problem;
   `reinterpret_cast` only with a clear account of the aliasing rules.
 - `(void)` only to silence a warning that cannot be removed otherwise.
+- `std::ignore` to discard a `[[nodiscard]]` result on purpose, never a `(void)`
+  cast: it reads as intent rather than as the C-style cast the rule above
+  forbids. Most often it is a test calling a function for its throw.
 - Avoid RTTI; prefer a virtual function or a visitor for type-dependent
   behaviour.
 
@@ -206,6 +211,13 @@ inline auto counter::value() const -> std::size_t
 - Exceptions signal what should not happen in normal operation, not ordinary
   control flow.
 - Throw `arude::exception` with a message saying what failed.
+- A helper whose exception escapes to its caller takes a trailing defaulted
+  `std::source_location` and forwards it to the exception, so the report names
+  the call site rather than the helper. It goes last, after any other defaulted
+  parameter, and callers pass nothing. A stacktrace is not a substitute: an
+  optimised build without debug info inlines the frame away, and libc++ has no
+  `std::stacktrace` at any version. An exception thrown and caught within one
+  function, as in `exception_report()`, is unaffected.
 - General handlers are `catch(...)`, reporting through
   `arude::exception_report()` rather than `e.what()`.
 - Destructors never throw, and nothing escapes one.

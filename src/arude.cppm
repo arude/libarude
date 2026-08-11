@@ -23,6 +23,7 @@ module;
 
 // Everything the headers need has to be included here. An include in the
 // purview would re-declare all of std as module-attached.
+#include "arude/enum.hpp"
 #include "arude/exception.hpp"
 #include "arude/exception_report.hpp"
 #include "arude/hello_world.hpp"
@@ -61,12 +62,30 @@ using exception_base_formatter_t = std::formatter<arude::exception_base>;
 export namespace arude
 {
 
+// The enum names are magic_enum's entities, re-exported a second time. They are
+// attached to the global module like every other header entity here, so a
+// module consumer and a header consumer share one enum_name and not two.
+using ::arude::case_insensitive;
+using ::arude::enum_c;
+using ::arude::enum_cast;
+using ::arude::enum_cast_throw;
+using ::arude::enum_contains;
+using ::arude::enum_count;
+using ::arude::enum_entries;
+using ::arude::enum_index;
+using ::arude::enum_integer;
+using ::arude::enum_name;
+using ::arude::enum_names;
+using ::arude::enum_type_name;
+using ::arude::enum_value;
+using ::arude::enum_values;
+
 using ::arude::exception;
 using ::arude::exception_base;
 using ::arude::exception_report;
 using ::arude::exception_stacktrace_t;
 using ::arude::exception_string_t;
-using ::arude::exception_user_data;
+using ::arude::exception_user_data_c;
 using ::arude::hello_world;
 using ::arude::noncopyable;
 using ::arude::stacktrace_available;

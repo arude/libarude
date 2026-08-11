@@ -112,6 +112,12 @@ CheckOptions:
   - key: readability-identifier-naming.TypedefSuffix
     value: '_t'
 
+  # Concepts end in _c, as type aliases end in _t.
+  - key: readability-identifier-naming.ConceptCase
+    value: lower_case
+  - key: readability-identifier-naming.ConceptSuffix
+    value: '_c'
+
   # Macros are a last resort; when unavoidable, ALL_CAPS_WITH_UNDERSCORES.
   - key: readability-identifier-naming.MacroDefinitionCase
     value: UPPER_CASE

@@ -37,6 +37,17 @@ namespace module_test
 class widget final : public arude::noncopyable
 {};
 
+///
+/// Declared here rather than in a header, so the enum a module consumer
+/// reflects on is one the module has never seen.
+///
+enum class colour
+{
+  red,
+  green,
+  blue
+};
+
 } // namespace module_test
 
 SCENARIO("the module exports the public interface", "[module]")
@@ -46,8 +57,8 @@ SCENARIO("the module exports the public interface", "[module]")
     THEN("the type aliases and concepts are reachable")
     {
       STATIC_REQUIRE(std::is_same_v<arude::exception_string_t, std::string>);
-      STATIC_REQUIRE(arude::exception_user_data<int>);
-      STATIC_REQUIRE(arude::exception_user_data<void>);
+      STATIC_REQUIRE(arude::exception_user_data_c<int>);
+      STATIC_REQUIRE(arude::exception_user_data_c<void>);
     }
 
     THEN("type_name is reachable and still constexpr")
@@ -71,6 +82,67 @@ SCENARIO("the module exports the public interface", "[module]")
       STATIC_REQUIRE(!std::is_copy_assignable_v<module_test::widget>);
       STATIC_REQUIRE(std::is_move_constructible_v<module_test::widget>);
       STATIC_REQUIRE(std::is_move_assignable_v<module_test::widget>);
+    }
+  }
+}
+
+// magic_enum is a dependency of the library, not of its consumers: a name that
+// reached this file through <magic_enum/magic_enum.hpp> would pass here while
+// arude::enum_name did not exist at all. Nothing here includes that header, so
+// every name below has to have come through the module.
+SCENARIO("the module exports the enum reflection", "[module]")
+{
+  using module_test::colour;
+
+  GIVEN("an enumeration declared in the importing translation unit")
+  {
+    THEN("the names come across and are still constexpr")
+    {
+      STATIC_REQUIRE(arude::enum_name(colour::green) == "green");
+      STATIC_REQUIRE(arude::enum_type_name<colour>() == "colour");
+      STATIC_REQUIRE(arude::enum_count<colour>() == 3);
+    }
+
+    THEN("the sequence accessors come across")
+    {
+      STATIC_REQUIRE(arude::enum_value<colour>(0) == colour::red);
+      STATIC_REQUIRE(arude::enum_values<colour>().size() == 3);
+      STATIC_REQUIRE(arude::enum_names<colour>().front() == "red");
+      STATIC_REQUIRE(arude::enum_entries<colour>().front().second == "red");
+      STATIC_REQUIRE(arude::enum_index(colour::blue).value() == 2);
+      STATIC_REQUIRE(arude::enum_integer(colour::blue) == 2);
+    }
+
+    THEN("the whole enum_cast overload set came from the one using-declaration")
+    {
+      STATIC_REQUIRE(arude::enum_cast<colour>(1).value() == colour::green);
+      STATIC_REQUIRE(arude::enum_cast<colour>("green").value() == colour::green);
+      STATIC_REQUIRE(!arude::enum_cast<colour>("GREEN").has_value());
+    }
+
+    THEN("case_insensitive is reachable and reaches the same overload")
+    {
+      STATIC_REQUIRE(arude::enum_cast<colour>("GREEN", arude::case_insensitive).value() == colour::green);
+      STATIC_REQUIRE(arude::enum_contains<colour>("GREEN", arude::case_insensitive));
+    }
+
+    THEN("enum_contains rejects a value outside the enumeration")
+    {
+      STATIC_REQUIRE(arude::enum_contains(colour::red));
+      STATIC_REQUIRE(!arude::enum_contains(static_cast<colour>(99)));
+    }
+
+    THEN("the concept came across")
+    {
+      STATIC_REQUIRE(arude::enum_c<colour>);
+      STATIC_REQUIRE(!arude::enum_c<int>);
+    }
+
+    THEN("enum_cast_throw came across, both overloads")
+    {
+      STATIC_REQUIRE(arude::enum_cast_throw<colour>(1) == colour::green);
+      REQUIRE(arude::enum_cast_throw<colour>("green") == colour::green);
+      REQUIRE_THROWS_AS(arude::enum_cast_throw<colour>(99), arude::exception_base);
     }
   }
 }

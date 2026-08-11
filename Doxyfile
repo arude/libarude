@@ -27,6 +27,11 @@ GENERATE_LATEX         = NO
 
 # Document what is documented, rather than inventing empty entries for
 # everything. Undocumented public API is reported instead of hidden.
+#
+# WARN_AS_ERROR stays NO deliberately: it would abandon the run, and the site is
+# worth having even when something in it is undocumented. The docs workflow
+# fails on a non-empty warning log instead, which gives the same guarantee
+# without losing the output. Locally the log is advisory, as clang-tidy is.
 EXTRACT_ALL            = NO
 WARN_IF_UNDOCUMENTED   = YES
 WARN_AS_ERROR          = NO
