@@ -8,96 +8,15 @@
 ///
 
 #include "arude/config.hpp"
+#include "test/helpers/temp_directory.hpp"
+#include "test/helpers/write_text.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
 #include <format>
-#include <fstream>
-#include <ios>
 #include <string>
-#include <string_view>
-#include <system_error>
 #include <tuple>
-
-namespace config_manager_test
-{
-
-///
-/// A directory in the temporary directory, removed again when it goes away.
-/// A directory rather than a file, because the manager creates the directories
-/// leading to a source and that has to be tested somewhere it can do no harm.
-///
-class temp_directory final
-{
-public: // Structors / Operators
-  ///
-  /// Creates the directory.
-  /// \param name Name to use, unique within this test binary.
-  ///
-  explicit temp_directory(std::string_view name);
-
-  ///
-  /// Removes the directory and everything in it.
-  ///
-  ~temp_directory();
-
-  temp_directory(const temp_directory&) = delete;
-  temp_directory(temp_directory&&) = delete;
-  auto operator=(const temp_directory&) -> temp_directory& = delete;
-  auto operator=(temp_directory&&) -> temp_directory& = delete;
-
-public: // Accessors
-  ///
-  /// Returns the path of a file in the directory.
-  /// \param name File name.
-  /// \return The path, whether or not anything is there.
-  ///
-  [[nodiscard]] auto file(std::string_view name) const -> std::filesystem::path;
-
-private: // Variables
-  std::filesystem::path path_;
-};
-
-///
-///
-temp_directory::temp_directory(const std::string_view name)
-  : path_{std::filesystem::temp_directory_path() / std::string{name}}
-{
-  std::filesystem::remove_all(path_);
-  std::filesystem::create_directories(path_);
-}
-
-///
-///
-temp_directory::~temp_directory()
-{
-  // A destructor throws nothing, and a leftover directory under the temporary
-  // directory is not worth reporting.
-  auto error = std::error_code{};
-  std::filesystem::remove_all(path_, error);
-}
-
-///
-///
-auto temp_directory::file(const std::string_view name) const -> std::filesystem::path
-{
-  return path_ / std::string{name};
-}
-
-///
-/// Writes text to a file, for the cases that need one no writer produces.
-///
-/// \param path File to write.
-/// \param text Text to write.
-///
-auto write_text(const std::filesystem::path& path, const std::string_view text) -> void
-{
-  auto stream = std::ofstream{path, std::ios::binary | std::ios::trunc};
-  stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-}
-
-} // namespace config_manager_test
 
 SCENARIO("create_uri names a configuration file", "[config][manager]")
 {
@@ -133,7 +52,7 @@ SCENARIO("the manager reads and writes a configuration", "[config][manager]")
 {
   GIVEN("a manager and a URI in a directory of its own")
   {
-    const auto directory = config_manager_test::temp_directory{"arude_manager_round_trip"};
+    const auto directory = test_helpers::temp_directory{"arude_manager_round_trip"};
     const auto uri = arude::config::create_uri(directory.file("app.toml"));
     auto manager = arude::config::config_manager{};
 
@@ -165,7 +84,7 @@ SCENARIO("the manager creates a configuration that is not there yet", "[config][
 {
   GIVEN("a URI under a directory that does not exist")
   {
-    const auto directory = config_manager_test::temp_directory{"arude_manager_create"};
+    const auto directory = test_helpers::temp_directory{"arude_manager_create"};
     const auto path = directory.file("nested") / "app.toml";
     const auto uri = arude::config::create_uri(path);
     auto manager = arude::config::config_manager{};
@@ -206,7 +125,7 @@ SCENARIO("the manager migrates an older file according to the policy", "[config]
 {
   GIVEN("a file written by version 1")
   {
-    const auto directory = config_manager_test::temp_directory{"arude_manager_migrate"};
+    const auto directory = test_helpers::temp_directory{"arude_manager_migrate"};
     const auto uri = arude::config::create_uri(directory.file("app.toml"));
     auto manager = arude::config::config_manager{};
 
@@ -253,7 +172,7 @@ SCENARIO("the manager reports what went wrong", "[config][manager]")
 {
   GIVEN("a manager")
   {
-    const auto directory = config_manager_test::temp_directory{"arude_manager_errors"};
+    const auto directory = test_helpers::temp_directory{"arude_manager_errors"};
     auto manager = arude::config::config_manager{};
 
     WHEN("the URI names an endpoint the call does not")
@@ -306,7 +225,7 @@ SCENARIO("the manager reports what went wrong", "[config][manager]")
       const auto path = directory.file("future.toml");
       const auto uri = arude::config::create_uri(path);
 
-      config_manager_test::write_text(path, "version = 99\nname = \"future\"\n");
+      test_helpers::write_text(path, "version = 99\nname = \"future\"\n");
 
       THEN("it is an invalid_version")
       {
@@ -327,7 +246,7 @@ SCENARIO("the manager reports what went wrong", "[config][manager]")
       const auto path = directory.file("nonsense.toml");
       const auto uri = arude::config::create_uri(path);
 
-      config_manager_test::write_text(path, "this is not = = TOML\n");
+      test_helpers::write_text(path, "this is not = = TOML\n");
 
       THEN("it is an invalid_payload")
       {
@@ -349,7 +268,7 @@ SCENARIO("the cache is separate from the sources", "[config][manager]")
 {
   GIVEN("a stored configuration")
   {
-    const auto directory = config_manager_test::temp_directory{"arude_manager_cache"};
+    const auto directory = test_helpers::temp_directory{"arude_manager_cache"};
     const auto uri = arude::config::create_uri(directory.file("app.toml"));
     auto manager = arude::config::config_manager{};
 
