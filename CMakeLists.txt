@@ -252,6 +252,10 @@ if(BUILD_TESTING)
   set_target_properties(${PROJECT_NAME}_test PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
                                                         CXX_STANDARD_REQUIRED ON
                                                         CXX_EXTENSIONS OFF)
+  # The project root, so a test includes test/helpers/ from the root the way
+  # docs/cpp-conventions.md asks rather than by relative path. The helpers
+  # themselves are picked up by the glob above and need no listing.
+  target_include_directories(${PROJECT_NAME}_test PRIVATE ${PROJECT_SOURCE_DIR})
   target_link_libraries(${PROJECT_NAME}_test PRIVATE ${PROJECT_NAME} Catch2::Catch2WithMain)
 
   # catch_discover_tests registers each test case with CTest individually.

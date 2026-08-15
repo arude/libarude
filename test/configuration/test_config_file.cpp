@@ -9,92 +9,17 @@
 
 #include "arude/config.hpp"
 #include "arude/exception.hpp"
+#include "test/helpers/temp_file.hpp"
+#include "test/helpers/write_text.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
 #include <cstddef>
 #include <filesystem>
-#include <fstream>
-#include <ios>
-#include <string>
-#include <string_view>
-#include <system_error>
 
 namespace config_file_test
 {
-
-///
-/// A path in the temporary directory that is removed again when it goes away.
-/// Catch2 runs the scenarios of one binary in one process, so a fixed name
-/// would have two of them writing the same file; the name is taken from the
-/// test rather than shared.
-///
-class temp_file final
-{
-public: // Structors / Operators
-  ///
-  /// Names a file in the temporary directory, without creating it.
-  /// \param name Name to use, unique within this test binary.
-  ///
-  explicit temp_file(std::string_view name);
-
-  ///
-  /// Removes the file if it was created.
-  ///
-  ~temp_file();
-
-  temp_file(const temp_file&) = delete;
-  temp_file(temp_file&&) = delete;
-  auto operator=(const temp_file&) -> temp_file& = delete;
-  auto operator=(temp_file&&) -> temp_file& = delete;
-
-public: // Accessors
-  ///
-  /// Returns the path named.
-  /// \return The path.
-  ///
-  [[nodiscard]] auto path() const -> const std::filesystem::path&;
-
-private: // Variables
-  std::filesystem::path path_;
-};
-
-///
-///
-temp_file::temp_file(const std::string_view name)
-  : path_{std::filesystem::temp_directory_path() / std::string{name}}
-{
-}
-
-///
-///
-temp_file::~temp_file()
-{
-  // A destructor throws nothing, and a leftover file in the temporary
-  // directory is not worth reporting anyway.
-  auto error = std::error_code{};
-  std::filesystem::remove(path_, error);
-}
-
-///
-///
-auto temp_file::path() const -> const std::filesystem::path&
-{
-  return path_;
-}
-
-///
-/// Writes text to a file, for the cases that need a file no writer produces.
-///
-/// \param path File to write.
-/// \param text Text to write.
-///
-auto write_text(const std::filesystem::path& path, const std::string_view text) -> void
-{
-  auto stream = std::ofstream{path, std::ios::binary | std::ios::trunc};
-  stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-}
 
 ///
 /// A current-version configuration with nothing left at its default.
@@ -114,7 +39,7 @@ SCENARIO("a configuration survives being written and read back", "[config][file]
 {
   GIVEN("a configuration and a file to put it in")
   {
-    const auto file = config_file_test::temp_file{"arude_config_round_trip.toml"};
+    const auto file = test_helpers::temp_file{"arude_config_round_trip.toml"};
     const auto written = config_file_test::make_current();
 
     WHEN("it is stored and loaded again")
@@ -166,7 +91,7 @@ SCENARIO("the version written is the type's own", "[config][file]")
 
     WHEN("it is stored and loaded again")
     {
-      const auto file = config_file_test::temp_file{"arude_config_stamped.toml"};
+      const auto file = test_helpers::temp_file{"arude_config_stamped.toml"};
       arude::config::store(file.path(), written);
 
       THEN("the file claims the version of the type that wrote it")
@@ -183,7 +108,7 @@ SCENARIO("an older file is migrated on load", "[config][file]")
 {
   GIVEN("a file written by version 1")
   {
-    const auto file = config_file_test::temp_file{"arude_config_migrated.toml"};
+    const auto file = test_helpers::temp_file{"arude_config_migrated.toml"};
     const auto written = arude::config::config_test_v1{.name = "old", .retries = 2};
 
     arude::config::store(file.path(), written);
@@ -221,7 +146,7 @@ SCENARIO("a file of the wrong version is refused rather than reinterpreted", "[c
 {
   GIVEN("a file written by the current version")
   {
-    const auto file = config_file_test::temp_file{"arude_config_wrong_version.toml"};
+    const auto file = test_helpers::temp_file{"arude_config_wrong_version.toml"};
     arude::config::store(file.path(), config_file_test::make_current());
 
     WHEN("it is loaded as version 1")
@@ -235,9 +160,9 @@ SCENARIO("a file of the wrong version is refused rather than reinterpreted", "[c
 
   GIVEN("a file written by a build newer than this one")
   {
-    const auto file = config_file_test::temp_file{"arude_config_future.toml"};
+    const auto file = test_helpers::temp_file{"arude_config_future.toml"};
 
-    config_file_test::write_text(file.path(), "version = 99\nname = \"future\"\n");
+    test_helpers::write_text(file.path(), "version = 99\nname = \"future\"\n");
 
     WHEN("it is loaded as the current version")
     {
@@ -267,9 +192,9 @@ SCENARIO("a file that cannot be read says so", "[config][file]")
 
   GIVEN("a file holding something that is not TOML")
   {
-    const auto file = config_file_test::temp_file{"arude_config_invalid.toml"};
+    const auto file = test_helpers::temp_file{"arude_config_invalid.toml"};
 
-    config_file_test::write_text(file.path(), "this is not = = TOML\n");
+    test_helpers::write_text(file.path(), "this is not = = TOML\n");
 
     THEN("loading throws")
     {
