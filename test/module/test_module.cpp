@@ -273,3 +273,63 @@ SCENARIO("a throw from a header consumer is caught by an importer", "[module]")
     }
   }
 }
+
+// Guarded the way src/arude.cppm guards the export list itself: with the
+// configuration support declined there is nothing here to reach. The macro
+// arrives from the library target, so this file still includes no arude header.
+#if !(defined ARUDE_NO_CONFIG)
+
+SCENARIO("the module exports the configuration interface", "[module][config]")
+{
+  GIVEN("nothing imported but arude")
+  {
+    THEN("the concepts and the version arithmetic came across")
+    {
+      STATIC_REQUIRE(arude::config::configuration_c<arude::config::config_test_t>);
+      STATIC_REQUIRE(arude::config::endpoint_c<arude::config::endpoint_toml>);
+      STATIC_REQUIRE(std::is_same_v<arude::config::config_test_t, arude::config::config_test_v2>);
+      STATIC_REQUIRE(arude::config::version_of<arude::config::config_test_v2>() == 2);
+    }
+
+    THEN("base64 came across and is still constexpr")
+    {
+      STATIC_REQUIRE(arude::config::base64_encoded_size(3) == 4);
+    }
+
+    THEN("a migration runs, so the steps came across with the types")
+    {
+      REQUIRE(arude::config::migrate<arude::config::config_test_v2>(arude::config::config_test_v1{}).version == 2);
+    }
+  }
+}
+
+// The point of the anchors in src/arude.cppm. Both specializations are found
+// by name lookup here rather than inside the module, so a conforming compiler
+// that pruned them would fail on this and nowhere else.
+SCENARIO("the module carries the configuration specializations", "[module][config]")
+{
+  GIVEN("a configuration holding a binary payload")
+  {
+    auto payload = arude::config::binary{};
+    payload.base64("Zm9v");
+
+    const auto text = arude::config::to_toml(arude::config::config_test_t{.secret = payload});
+
+    THEN("the reflector stored it as base64, and reads it back")
+    {
+      REQUIRE(text.contains("Zm9v"));
+      REQUIRE(arude::config::from_toml<arude::config::config_test_t>(text).secret == payload);
+    }
+  }
+
+  GIVEN("a manager error")
+  {
+    THEN("it formats as its name, which is what the formatter anchor is for")
+    {
+      REQUIRE(std::format("{}", arude::config::config_manager::errors::io_error) == "io_error");
+      STATIC_REQUIRE(arude::enum_name(arude::config::config_manager::errors::not_found) == "not_found");
+    }
+  }
+}
+
+#endif // #if !(defined ARUDE_NO_CONFIG)

@@ -20,6 +20,13 @@
 #include "arude/noncopyable.hpp"
 #include "arude/type_name.hpp"
 
+// Configuration support is part of libarude, so it is included unless the
+// build has declined it — ARUDE_NO_CONFIG is what the build defines to say
+// that reflect-cpp and Boost.URL are not there to be included.
+#if !(defined ARUDE_NO_CONFIG)
+  #include "arude/config.hpp"
+#endif // #if !(defined ARUDE_NO_CONFIG)
+
 ///
 /// Root namespace for everything libarude provides.
 /// Documented here so Doxygen produces a namespace index; without it the API
