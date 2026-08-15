@@ -15,6 +15,10 @@
 ///
 #pragma once
 
+// Included for the std::formatter it carries for every enum, and not for a
+// name used here: without it exception<errors> reports its payload as not
+// formattable, which is the part of the report a caller wants most.
+#include "arude/enum.hpp"
 #include "arude/exception.hpp"
 
 #include <cstddef>
