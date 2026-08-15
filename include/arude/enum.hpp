@@ -26,6 +26,18 @@
 /// entities, which is an ODR violation no linker reports. If it must be global,
 /// set it as a compile definition on the libarude target.
 ///
+/// Including this header also makes every enumeration formattable, through the
+/// std::formatter that magic_enum_format.hpp declares for any enum. That is a
+/// wider reach than the rest of this file: it is not confined to libarude's own
+/// enumerations, nor to a consumer's, so an enum anywhere in a program that
+/// includes any arude header formats as its enumerator name — and as its
+/// underlying integer where the value denotes none. A type that wants something
+/// else opts out with a magic_enum::customize::enum_format_enabled
+/// specialization returning false, and then declares its own formatter; a
+/// second formatter for the same type without that opt-out is redundant at
+/// best. The alternative was a specialization per enum, which is the same
+/// fifteen lines written again for each one and forgotten for the sixteenth.
+///
 /// The re-exports are documented by the table below rather than one block per
 /// declaration, because a block there would reach nobody: magic_enum's headers
 /// are not in the Doxyfile's INPUT, so doxygen cannot resolve what a
@@ -69,6 +81,7 @@
 #include "arude/exception.hpp"
 
 #include <magic_enum/magic_enum.hpp>
+#include <magic_enum/magic_enum_format.hpp>
 
 #include <format>
 #include <functional>

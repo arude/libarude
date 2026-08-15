@@ -77,6 +77,13 @@ namespace arude::config::detail
 // happens in the consumer's translation unit rather than here. Discarded, it
 // would take a configuration with a payload down with it and leave the rest of
 // the interface working.
+//
+// The second anchors one instantiation of the formatter arude/enum.hpp carries
+// for every enum, which is the instantiation the library's own error reports
+// need. It cannot do more than that: what the fragment holds is a partial
+// specialization, a using-declaration can only name an instantiation of one,
+// and so a module consumer formatting an enum of its own is relying on that
+// partial specialization surviving the prune rather than on anything here.
 using binary_reflector_t = rfl::Reflector<arude::config::binary>;
 using config_errors_formatter_t = std::formatter<arude::config::config_manager::errors>;
 

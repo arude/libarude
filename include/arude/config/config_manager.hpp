@@ -40,7 +40,6 @@
 #include "arude/config/config_file.hpp"
 #include "arude/config/endpoint.hpp"
 #include "arude/config/migration.hpp"
-#include "arude/enum.hpp"
 #include "arude/exception.hpp"
 #include "arude/exception_report.hpp"
 #include "arude/noncopyable.hpp"
@@ -84,6 +83,9 @@ public: // Typedefs / Constants
   /// Distinguishing these is the point: a caller can create a configuration on
   /// not_found, report io_error to the user, and refuse to start on
   /// invalid_payload, which one message string would not let it do.
+  ///
+  /// Formats as its own name, through arude/enum.hpp, so an exception report
+  /// names the error rather than calling the payload unformattable.
   ///
   enum class errors : std::uint8_t
   {
@@ -353,35 +355,6 @@ constexpr auto is_set(const config_manager::load_policy value, const config_mana
 {
   return (value & flag) == flag;
 }
-
-} // namespace arude::config
-
-///
-/// formatter specialization for arude::config::config_manager::errors.
-/// Without it an exception carrying an error reports the payload as not
-/// formattable, which is the one part of the report a caller most wants.
-///
-template<>
-struct std::formatter<arude::config::config_manager::errors> : formatter<string_view>
-{
-  ///
-  /// Writes the name of the error.
-  /// The name comes from arude::enum_name rather than from a switch here: a
-  /// switch would have to be remembered when an enumerator is added, and the
-  /// one that was forgotten is the one nobody sees until it is reported.
-  ///
-  /// \param val Error to format.
-  /// \param ctx The format context.
-  /// \return The iterator past the written output.
-  ///
-  auto format(const arude::config::config_manager::errors& val, auto& ctx) const
-  {
-    return formatter<string_view>::format(arude::enum_name(val), ctx);
-  }
-};
-
-namespace arude::config
-{
 
 ///
 ///
