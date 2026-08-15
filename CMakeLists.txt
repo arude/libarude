@@ -62,6 +62,51 @@ include(cmake/CPM.cmake)
 # project, so as a subproject they are already off and need no overriding here.
 CPMAddPackage("gh:Neargye/magic_enum@0.9.8")
 
+# ---- Configuration support ----
+
+# Configuration support is part of libarude rather than an extra, so the option
+# is a way of declining it and not a way of asking for it. Off means the two
+# dependencies below are never downloaded, arude/config.hpp is not reachable,
+# and nothing else changes.
+option(ARUDE_NO_CONFIG "Build without the TOML configuration support" OFF)
+
+if(NOT ARUDE_NO_CONFIG)
+  # reflect-cpp compiles one translation unit per serialization format it
+  # supports, each with its own third-party parser behind it. TOML is the only
+  # format libarude uses, so it is the only one asked for; the others would be
+  # dependencies bought and never used. JSON is switched off explicitly because
+  # it is the format reflect-cpp enables by default.
+  set(REFLECTCPP_TOML ON)
+  set(REFLECTCPP_JSON OFF)
+  set(REFLECTCPP_BUILD_SHARED OFF)
+  set(REFLECTCPP_BUILD_TESTS OFF)
+  set(REFLECTCPP_BUILD_BENCHMARKS OFF)
+
+  # Fetched by tag rather than as an archive: reflect-cpp keeps toml++ as a git
+  # submodule, and only a clone brings it along.
+  CPMAddPackage("gh:getml/reflect-cpp@0.19.0")
+
+  # Boost.URL parses the URIs a configuration source is named by. Boost ships a
+  # CMake release archive that builds a subset, so BOOST_INCLUDE_LIBRARIES is
+  # what keeps this to url and the handful of headers it needs rather than all
+  # of Boost.
+  CPMAddPackage(
+    NAME Boost
+    VERSION 1.88.0
+    URL https://github.com/boostorg/boost/releases/download/boost-1.88.0/boost-1.88.0-cmake.tar.xz
+    OPTIONS "BOOST_ENABLE_CMAKE ON" "BOOST_INCLUDE_LIBRARIES url"
+  )
+
+  # Built at our standard for the same reason Catch2 is; see the comment there.
+  foreach(config_target IN ITEMS reflectcpp boost_url)
+    if(TARGET ${config_target})
+      set_target_properties(${config_target} PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                                        CXX_STANDARD_REQUIRED ON
+                                                        CXX_EXTENSIONS OFF)
+    endif()
+  endforeach()
+endif()
+
 # ---- Add source files ----
 
 # Note: globbing sources is considered bad practice as CMake's generators may not detect new files
@@ -97,6 +142,18 @@ endif()
 # PUBLIC for the same reason: magic_enum is header-only, and a header of ours
 # that includes it puts it on every consumer's include path too.
 target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
+
+# PUBLIC for the same reason: arude/config/ is headers, so a consumer compiles
+# reflect-cpp's and Boost.URL's headers itself and links what they compile.
+#
+# The definition goes the same way round as the option: defined only when the
+# support was declined, so a consumer who builds against these headers without
+# CMake gets the configuration support rather than silently losing it.
+if(ARUDE_NO_CONFIG)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC ARUDE_NO_CONFIG)
+else()
+  target_link_libraries(${PROJECT_NAME} PUBLIC reflectcpp Boost::url)
+endif()
 
 target_include_directories(
   ${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
@@ -183,6 +240,13 @@ if(BUILD_TESTING)
   # test/module imports rather than includes, so it needs the module target and
   # is only built when that exists.
   list(FILTER test_sources EXCLUDE REGEX "/test/module/")
+
+  # test/configuration covers arude/config/, which is not built at all when the
+  # configuration support is declined. Named apart from test/config above,
+  # which is about build configuration rather than about this feature.
+  if(ARUDE_NO_CONFIG)
+    list(FILTER test_sources EXCLUDE REGEX "/test/configuration/")
+  endif()
 
   add_executable(${PROJECT_NAME}_test ${test_sources})
   set_target_properties(${PROJECT_NAME}_test PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
