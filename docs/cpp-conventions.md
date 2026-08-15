@@ -4,7 +4,8 @@ Rules for writing libarude, imported by `CLAUDE.md` so they apply while code is
 written; the review skill checks against them. Target C++23.
 
 `.clang-format` owns everything about formatting and is not repeated here —
-never hand-format, run `clang-format -i`.
+never hand-format, run `clang-format -i`. Every file ends with a newline, CMake
+and workflows included; `.github/workflows/checks.yml` enforces it.
 
 libarude is header-mostly, so interfaces are the expensive part: they reach
 every consumer and are hard to withdraw. Where a rule trades convenience for a
