@@ -118,6 +118,8 @@ SCENARIO("dependent_t yields its second argument unchanged", "[type_traits]")
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<int, char&>, char&>);
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<int, char&&>, char&&>);
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<int, char* const>, char* const>);
+      // The array is the point: the alias must hand it back undecayed.
+      // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, modernize-avoid-c-arrays)
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<int, char[4]>, char[4]>);
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<int, char(double)>, char(double)>);
     }
@@ -142,6 +144,8 @@ SCENARIO("dependent_t ignores its first argument", "[type_traits]")
     {
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<void, int>, int>);
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<double&, int>, int>);
+      // The array is the point: the first argument is only spelled, never touched.
+      // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, modernize-avoid-c-arrays)
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<char[4], int>, int>);
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<type_traits_test::late_type, int>, int>);
     }
