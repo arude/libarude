@@ -13,7 +13,7 @@
 /// here keeps that manageable:
 ///
 ///   - Every version is a separate type in its own header, and never edited
-///     again once released. config_test_v1 stays what version 1 meant.
+///     again once released: version 1's type stays what version 1 meant.
 ///   - Each type states its version twice over: as config_version, known at
 ///     compile time, and as the version data member, which is what ends up in
 ///     the file. The member is initialised from the constant, so the two

@@ -23,6 +23,7 @@
 #include "arude/pimpl_owner.hpp"
 #include "arude/signal_owner.hpp"
 #include "arude/type_name.hpp"
+#include "arude/type_traits.hpp"
 
 // Configuration support is part of libarude, so it is included unless the
 // build has declined it — ARUDE_NO_CONFIG is what the build defines to say

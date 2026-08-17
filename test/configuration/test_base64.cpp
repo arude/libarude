@@ -19,6 +19,8 @@
 #include <string_view>
 #include <vector>
 
+namespace
+{
 namespace base64_test
 {
 
@@ -64,6 +66,8 @@ namespace base64_test
 }
 
 } // namespace base64_test
+
+} // namespace
 
 // The vectors from RFC 4648 section 10, which cover all three lengths a final
 // group can have and are what every other base64 implementation is tested

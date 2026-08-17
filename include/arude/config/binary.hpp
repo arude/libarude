@@ -38,10 +38,6 @@ concept byte_range_c =
 
 ///
 /// An opaque run of bytes, stored in a configuration file as base64 text.
-/// TOML has no binary type, so bytes have to be spelled as something a TOML
-/// document can hold. base64 is that something: it survives a round trip
-/// through a text file unchanged, stays on one line, and is what a reader
-/// coming from any other language will expect.
 ///
 /// Declare a member of this type rather than a std::vector<std::byte>; the
 /// reflect-cpp reflector that performs the encoding is attached to this type,
@@ -51,8 +47,20 @@ concept byte_range_c =
 class binary final
 {
 public: // Typedefs
+  ///
+  /// The payload as bytes.
+  ///
   using bytes_t = std::vector<std::byte>;
+
+  ///
+  /// The payload as base64 text, which is how it is written to a file.
+  ///
   using string_t = std::string;
+
+  ///
+  /// The size type used on this interface.
+  ///
+  using size_t = std::size_t;
 
 public: // Structors / Operators
   ///
@@ -109,7 +117,7 @@ public: // Accessors
   /// Strongly exception safe: the payload is left as it was if the text does
   /// not decode.
   ///
-  /// \param text Encoded text. Not retained.
+  /// \param text Encoded text.
   /// \throws arude::exception If the text is not valid base64.
   ///
   constexpr auto base64(std::string_view text) -> void;
@@ -118,7 +126,7 @@ public: // Accessors
   /// Returns the number of bytes held.
   /// \return The number of bytes.
   ///
-  [[nodiscard]] constexpr auto size() const -> std::size_t;
+  [[nodiscard]] constexpr auto size() const -> size_t;
 
   ///
   /// Reports whether any bytes are held.
@@ -177,7 +185,7 @@ constexpr auto binary::base64(const std::string_view text) -> void
 
 ///
 ///
-constexpr auto binary::size() const -> std::size_t
+constexpr auto binary::size() const -> size_t
 {
   return bytes_.size();
 }
@@ -204,8 +212,11 @@ namespace rfl
 template<>
 struct Reflector<arude::config::binary>
 {
-  // reflect-cpp finds this member type by name, so it keeps reflect-cpp's
-  // spelling rather than the one docs/cpp-conventions.md asks for.
+  ///
+  /// The reflected shape: the payload as base64 text.
+  /// reflect-cpp finds this member type by name, so it keeps reflect-cpp's
+  /// spelling rather than the one docs/cpp-conventions.md asks for.
+  ///
   // NOLINTNEXTLINE(readability-identifier-naming)
   using ReflType = std::string;
 

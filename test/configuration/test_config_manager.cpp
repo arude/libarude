@@ -8,368 +8,236 @@
 ///
 
 #include "arude/config.hpp"
-#include "test/helpers/temp_directory.hpp"
-#include "test/helpers/write_text.hpp"
+#include "arude/exception.hpp"
+#include "arude/non_owning_t.hpp"
+#include "test/helpers/config_test_v2.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <filesystem>
-#include <format>
+#include <cstddef>
+#include <map>
+#include <span>
 #include <string>
+#include <string_view>
 #include <tuple>
+#include <utility>
+#include <vector>
 
-SCENARIO("create_uri names a configuration file", "[config][manager]")
+namespace config_manager_test
 {
-  GIVEN("a path")
-  {
-    const auto uri = arude::config::create_uri("config.toml");
 
-    THEN("the scheme names the endpoint and the transport")
-    {
-      REQUIRE(std::string{uri.scheme()} == "toml+file");
-      REQUIRE(std::string{uri.buffer()}.starts_with("toml+file:"));
-    }
+///
+/// A transport holding one slot's bytes in memory, so a test can register
+/// several documents without touching the filesystem.
+///
+class transport_memory final
+{
+public: // Typedefs
+  using store_t = std::map<std::string, std::vector<std::byte>>;
 
-    THEN("the path is absolute, so the same file always produces the same URI")
-    {
-      REQUIRE(std::filesystem::path{std::string{uri.path()}}.is_absolute());
-      REQUIRE(std::string{uri.buffer()} == std::string{arude::config::create_uri("./config.toml").buffer()});
-    }
-  }
+public: // Constants
+  static constexpr auto name = std::string_view{"eeprom"};
 
-  GIVEN("the scheme an endpoint contributes")
-  {
-    THEN("it is the endpoint's name and the transport, at compile time")
-    {
-      REQUIRE(arude::config::uri_scheme<arude::config::endpoint_toml>() == "toml+file");
-      STATIC_REQUIRE(arude::config::endpoint_c<arude::config::endpoint_toml>);
-      STATIC_REQUIRE(arude::config::endpoint_toml::name == "toml");
-    }
-  }
+public: // Structors
+  ///
+  /// \param slot Which slot this transport reads and writes.
+  /// \param store Where the bytes live. Held by reference and must outlive this.
+  ///
+  transport_memory(std::string_view slot, store_t& store);
+
+public: // Accessors
+  [[nodiscard]] auto location() const -> std::string;
+  [[nodiscard]] auto writable() const -> bool;
+  [[nodiscard]] auto exists() const -> bool;
+  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+
+public: // Methods
+  auto write(std::span<const std::byte> bytes) const -> void;
+
+private: // Variables
+  std::string slot_;
+  arude::non_owning_t<store_t> store_;
+};
+
+///
+///
+transport_memory::transport_memory(const std::string_view slot, store_t& store)
+  : slot_{slot}
+  , store_{&store}
+{
 }
 
-SCENARIO("the manager reads and writes a configuration", "[config][manager]")
+///
+///
+auto transport_memory::location() const -> std::string
 {
-  GIVEN("a manager and a URI in a directory of its own")
+  return std::format("{}:{}", name, slot_);
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_memory::writable() const -> bool
+{
+  return true;
+}
+
+///
+///
+auto transport_memory::exists() const -> bool
+{
+  return store_->contains(slot_);
+}
+
+///
+///
+auto transport_memory::read() const -> std::vector<std::byte>
+{
+  return store_->at(slot_);
+}
+
+///
+///
+auto transport_memory::write(const std::span<const std::byte> bytes) const -> void
+{
+  store_->insert_or_assign(slot_, std::vector<std::byte>{cbegin(bytes), cend(bytes)});
+}
+
+} // namespace config_manager_test
+
+static_assert(arude::config::transport_c<config_manager_test::transport_memory>);
+
+SCENARIO("a location can only be registered once", "[config][config_manager]")
+{
+  GIVEN("a manager and one registered document")
   {
-    const auto directory = test_helpers::temp_directory{"arude_manager_round_trip"};
-    const auto uri = arude::config::create_uri(directory.file("app.toml"));
+    auto store = config_manager_test::transport_memory::store_t{};
     auto manager = arude::config::config_manager{};
 
-    WHEN("a configuration is stored")
+    std::ignore =
+      manager.register_document(arude::config::endpoint_toml{}, config_manager_test::transport_memory{"slot", store});
+
+    THEN("the manager knows the location and its size")
     {
-      auto written = arude::config::config_test_t{};
-      written.name = "stored";
-      written.retries = 9;
+      REQUIRE(manager.contains("eeprom:slot"));
+      REQUIRE(manager.size() == 1);
+    }
 
-      manager.store(uri, written);
-
-      THEN("the file is there and holds it")
+    THEN("registering the same location again is an already_registered_location")
+    {
+      try
       {
-        REQUIRE(std::filesystem::exists(directory.file("app.toml")));
-        REQUIRE(manager.load<arude::config::config_test_t>(uri).name == "stored");
+        std::ignore = manager.register_document(
+          arude::config::endpoint_toml{}, config_manager_test::transport_memory{"slot", store});
+        FAIL("registering a location twice should have thrown");
       }
-
-      THEN("it is in the cache as well, without the file being read again")
+      catch(const arude::config::exception_t& ex)
       {
-        REQUIRE(manager.contains(uri));
-        REQUIRE(manager.size() == 1);
-        REQUIRE(manager.get<arude::config::config_test_t>(uri).retries == 9);
+        // Not invalid_location: there is nothing wrong with the location, only
+        // with registering it a second time.
+        REQUIRE(ex.data() == arude::config::config_error::already_registered_location);
       }
     }
   }
 }
 
-SCENARIO("the manager creates a configuration that is not there yet", "[config][manager]")
+SCENARIO("get<T> answers for the type index", "[config][config_manager]")
 {
-  GIVEN("a URI under a directory that does not exist")
+  GIVEN("a manager with one document holding a root section")
   {
-    const auto directory = test_helpers::temp_directory{"arude_manager_create"};
-    const auto path = directory.file("nested") / "app.toml";
-    const auto uri = arude::config::create_uri(path);
+    auto store = config_manager_test::transport_memory::store_t{};
     auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, config_manager_test::transport_memory{"slot", store});
+    auto root = document.add_root<test_helpers::config_test_t>();
 
-    WHEN("it is loaded without the create policy")
+    WHEN("the section is set")
     {
-      THEN("it is not found, and nothing is written")
+      auto written = test_helpers::config_test_t{};
+      written.name = "through the index";
+
+      root.set(written);
+
+      THEN("get<T>() returns it")
       {
-        REQUIRE_THROWS_AS(
-          manager.load<arude::config::config_test_t>(uri, arude::config::config_manager::load_policy::none),
-          arude::config::config_manager::exception_t);
-        REQUIRE(!std::filesystem::exists(path));
+        REQUIRE(manager.get<test_helpers::config_test_t>().name == "through the index");
+      }
+
+      THEN("find<T>() is the same handle")
+      {
+        REQUIRE(manager.find<test_helpers::config_test_t>().get().name == "through the index");
       }
     }
 
-    WHEN("it is loaded with the create policy")
+    THEN("a type nobody registered is a not_found")
     {
-      constexpr auto policy = arude::config::config_manager::load_policy::create |
-                              arude::config::config_manager::load_policy::upgrade_to_current;
-
-      const auto created = manager.load<arude::config::config_test_t>(uri, policy);
-
-      THEN("the defaults come back")
+      try
       {
-        REQUIRE(created.name == arude::config::config_test_t{}.name);
+        std::ignore = manager.get<test_helpers::config_test_v1>();
+        FAIL("getting an unregistered type should have thrown");
       }
-
-      THEN("the file is written, directories and all, so it can be edited")
+      catch(const arude::config::exception_t& ex)
       {
-        REQUIRE(std::filesystem::exists(path));
-        REQUIRE(manager.load<arude::config::config_test_t>(uri).name == created.name);
+        REQUIRE(ex.data() == arude::config::config_error::not_found);
       }
     }
   }
-}
 
-SCENARIO("the manager migrates an older file according to the policy", "[config][manager]")
-{
-  GIVEN("a file written by version 1")
+  GIVEN("a type registered in two documents")
   {
-    const auto directory = test_helpers::temp_directory{"arude_manager_migrate"};
-    const auto uri = arude::config::create_uri(directory.file("app.toml"));
+    auto store = config_manager_test::transport_memory::store_t{};
     auto manager = arude::config::config_manager{};
+    auto first =
+      manager.register_document(arude::config::endpoint_toml{}, config_manager_test::transport_memory{"first", store});
+    auto second =
+      manager.register_document(arude::config::endpoint_toml{}, config_manager_test::transport_memory{"second", store});
 
-    manager.store(uri, arude::config::config_test_v1{.name = "old", .retries = 2});
+    std::ignore = first.add_root<test_helpers::config_test_t>();
+    std::ignore = second.add_root<test_helpers::config_test_t>();
 
-    WHEN("it is loaded as the current version, upgrading")
+    THEN("get<T>() is an ambiguous_type naming the type and both locations")
     {
-      const auto loaded = manager.load<arude::config::config_test_t>(uri);
-
-      THEN("it arrives upgraded")
+      try
       {
-        REQUIRE(loaded.version == 2);
-        REQUIRE(loaded.name == "old");
-        REQUIRE(loaded.endpoint == "localhost");
+        std::ignore = manager.get<test_helpers::config_test_t>();
+        FAIL("getting an ambiguous type should have thrown");
       }
-    }
-
-    WHEN("it is loaded with strict_version")
-    {
-      constexpr auto policy = arude::config::config_manager::load_policy::strict_version;
-
-      THEN("it is refused as the wrong version")
+      catch(const arude::config::exception_t& ex)
       {
-        REQUIRE_THROWS_AS(
-          manager.load<arude::config::config_test_t>(uri, policy), arude::config::config_manager::exception_t);
-      }
-    }
-
-    WHEN("it is loaded as the version it actually is")
-    {
-      constexpr auto policy = arude::config::config_manager::load_policy::strict_version;
-
-      const auto loaded = manager.load<arude::config::config_test_v1>(uri, policy);
-
-      THEN("that works, because no migration is needed")
-      {
-        REQUIRE(loaded.name == "old");
+        REQUIRE(ex.data() == arude::config::config_error::ambiguous_type);
+        REQUIRE(ex.str().contains("eeprom:first"));
+        REQUIRE(ex.str().contains("eeprom:second"));
       }
     }
   }
 }
 
-SCENARIO("the manager reports what went wrong", "[config][manager]")
+SCENARIO("a document handle outlives its manager", "[config][config_manager]")
 {
-  GIVEN("a manager")
+  GIVEN("a manager that registered a document and then went away")
   {
-    const auto directory = test_helpers::temp_directory{"arude_manager_errors"};
-    auto manager = arude::config::config_manager{};
-
-    WHEN("the URI names an endpoint the call does not")
+    auto store = config_manager_test::transport_memory::store_t{};
+    auto root = [&]() -> arude::config::config_handle<test_helpers::config_test_t>
     {
-      const auto uri = arude::config::config_manager::parse_uri("other+file:///app.toml");
+      auto manager = arude::config::config_manager{};
+      auto document =
+        manager.register_document(arude::config::endpoint_toml{}, config_manager_test::transport_memory{"slot", store});
+      return document.add_root<test_helpers::config_test_t>();
+    }();
 
-      THEN("it is an invalid_uri")
-      {
-        try
-        {
-          std::ignore = manager.load<arude::config::config_test_t>(uri);
-          FAIL("loading a foreign scheme should have thrown");
-        }
-        catch(const arude::config::config_manager::exception_t& ex)
-        {
-          REQUIRE(ex.data() == arude::config::config_manager::errors::invalid_uri);
-        }
-      }
-    }
-
-    WHEN("the text is not a URI at all")
+    WHEN("the handle is used after the manager's destruction")
     {
-      THEN("parsing it is an invalid_uri")
+      auto written = test_helpers::config_test_t{};
+      written.name = "outliving";
+
+      root.set(written);
+      root.store();
+      root.load();
+
+      THEN("it still reaches its document")
       {
-        REQUIRE_THROWS_AS(
-          arude::config::config_manager::parse_uri("not a uri"), arude::config::config_manager::exception_t);
+        REQUIRE(root.get().name == "outliving");
       }
-    }
-
-    WHEN("the file is not there")
-    {
-      const auto uri = arude::config::create_uri(directory.file("absent.toml"));
-
-      THEN("it is a not_found")
-      {
-        try
-        {
-          std::ignore = manager.load<arude::config::config_test_t>(uri);
-          FAIL("loading an absent file should have thrown");
-        }
-        catch(const arude::config::config_manager::exception_t& ex)
-        {
-          REQUIRE(ex.data() == arude::config::config_manager::errors::not_found);
-        }
-      }
-    }
-
-    WHEN("the file holds a version nothing here knows")
-    {
-      const auto path = directory.file("future.toml");
-      const auto uri = arude::config::create_uri(path);
-
-      test_helpers::write_text(path, "version = 99\nname = \"future\"\n");
-
-      THEN("it is an invalid_version")
-      {
-        try
-        {
-          std::ignore = manager.load<arude::config::config_test_t>(uri);
-          FAIL("loading a future version should have thrown");
-        }
-        catch(const arude::config::config_manager::exception_t& ex)
-        {
-          REQUIRE(ex.data() == arude::config::config_manager::errors::invalid_version);
-        }
-      }
-    }
-
-    WHEN("the file is not a configuration")
-    {
-      const auto path = directory.file("nonsense.toml");
-      const auto uri = arude::config::create_uri(path);
-
-      test_helpers::write_text(path, "this is not = = TOML\n");
-
-      THEN("it is an invalid_payload")
-      {
-        try
-        {
-          std::ignore = manager.load<arude::config::config_test_t>(uri);
-          FAIL("loading nonsense should have thrown");
-        }
-        catch(const arude::config::config_manager::exception_t& ex)
-        {
-          REQUIRE(ex.data() == arude::config::config_manager::errors::invalid_payload);
-        }
-      }
-    }
-  }
-}
-
-SCENARIO("the cache is separate from the sources", "[config][manager]")
-{
-  GIVEN("a stored configuration")
-  {
-    const auto directory = test_helpers::temp_directory{"arude_manager_cache"};
-    const auto uri = arude::config::create_uri(directory.file("app.toml"));
-    auto manager = arude::config::config_manager{};
-
-    manager.store(uri, arude::config::config_test_t{});
-
-    WHEN("the cached value is changed but not stored")
-    {
-      auto changed = manager.get<arude::config::config_test_t>(uri);
-      changed.name = "changed";
-      manager.set(uri, changed);
-
-      THEN("the cache has it and the file does not")
-      {
-        REQUIRE(manager.get<arude::config::config_test_t>(uri).name == "changed");
-        REQUIRE(arude::config::load<arude::config::config_test_t>(directory.file("app.toml")).name != "changed");
-      }
-
-      THEN("storing from the cache commits it")
-      {
-        manager.store<arude::config::config_test_t>(uri);
-
-        REQUIRE(arude::config::load<arude::config::config_test_t>(directory.file("app.toml")).name == "changed");
-      }
-    }
-
-    WHEN("the entry is evicted")
-    {
-      const auto evicted = manager.evict(uri);
-
-      THEN("it is gone from the cache, and the file is untouched")
-      {
-        REQUIRE(evicted);
-        REQUIRE(!manager.contains(uri));
-        REQUIRE(std::filesystem::exists(directory.file("app.toml")));
-      }
-
-      THEN("reading it from the cache is a not_found")
-      {
-        try
-        {
-          std::ignore = manager.get<arude::config::config_test_t>(uri);
-          FAIL("getting an evicted entry should have thrown");
-        }
-        catch(const arude::config::config_manager::exception_t& ex)
-        {
-          REQUIRE(ex.data() == arude::config::config_manager::errors::not_found);
-        }
-      }
-    }
-
-    WHEN("the cache holds another type under the URI")
-    {
-      manager.set(uri, arude::config::config_test_v1{});
-
-      THEN("asking for the wrong one is an invalid_payload rather than a bad cast")
-      {
-        try
-        {
-          std::ignore = manager.get<arude::config::config_test_v2>(uri);
-          FAIL("getting the wrong type should have thrown");
-        }
-        catch(const arude::config::config_manager::exception_t& ex)
-        {
-          REQUIRE(ex.data() == arude::config::config_manager::errors::invalid_payload);
-        }
-      }
-    }
-
-    WHEN("everything is evicted")
-    {
-      manager.evict_all();
-
-      THEN("the cache is empty")
-      {
-        REQUIRE(manager.size() == 0);
-      }
-    }
-  }
-}
-
-SCENARIO("load policies combine as flags", "[config][manager]")
-{
-  GIVEN("two flags")
-  {
-    constexpr auto policy =
-      arude::config::config_manager::load_policy::create | arude::config::config_manager::load_policy::strict_version;
-
-    THEN("both are set and the third is not")
-    {
-      STATIC_REQUIRE(arude::config::is_set(policy, arude::config::config_manager::load_policy::create));
-      STATIC_REQUIRE(arude::config::is_set(policy, arude::config::config_manager::load_policy::strict_version));
-      STATIC_REQUIRE(!arude::config::is_set(policy, arude::config::config_manager::load_policy::upgrade_to_current));
-    }
-  }
-
-  GIVEN("an error value")
-  {
-    THEN("it has a name, so a report says which one it was")
-    {
-      STATIC_REQUIRE(arude::enum_name(arude::config::config_manager::errors::io_error) == "io_error");
-      REQUIRE(std::format("{}", arude::config::config_manager::errors::io_error) == "io_error");
     }
   }
 }

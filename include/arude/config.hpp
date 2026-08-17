@@ -18,29 +18,48 @@
 ///
 /// A configuration is a plain aggregate, reflected by reflect-cpp and stored
 /// as TOML. An application goes through arude::config::config_manager, which
-/// caches what it reads:
+/// registers documents and hands out section handles:
 ///
 /// ```cpp
 /// auto manager = arude::config::config_manager{};
-/// const auto uri = arude::config::create_uri("app.toml");
 ///
-/// auto config = manager.load<arude::config::config_test_t>(uri);
-/// config.retries = 5;
-/// manager.store(uri, config);
+/// auto document = manager.register_document(
+///   arude::config::endpoint_toml{}, arude::config::transport_file{"app.toml"});
+///
+/// auto app     = document.add_root<app_config>();
+/// auto network = document.add_section<network_config>("network");
+///
+/// document.load();                       // One read, one parse, all sections filled.
+///
+/// auto server = http_server{network};    // Injected with the section, nothing more.
 /// ```
 ///
-/// arude/config/config_file.hpp is the layer under that, for a single file
-/// with no manager and no cache in the way.
+/// Under that sits the pair the document is built from, usable directly where
+/// a manager and a cache would be in the way: an endpoint is the format and a
+/// transport is the place, so endpoint_toml{}.parse(transport_file{path}) is
+/// one file read and nothing else. arude/config/endpoint_toml.hpp also carries
+/// to_toml() and from_toml() for text that never reaches a transport at all.
 ///
 
 #include "arude/config/base64.hpp"
 #include "arude/config/binary.hpp"
-#include "arude/config/config_file.hpp"
+#include "arude/config/common.hpp"
+#include "arude/config/config_document.hpp"
+#include "arude/config/config_handle.hpp"
 #include "arude/config/config_manager.hpp"
-#include "arude/config/config_test_v1.hpp"
-#include "arude/config/config_test_v2.hpp"
 #include "arude/config/endpoint.hpp"
+#include "arude/config/endpoint_toml.hpp"
+#include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
+#include "arude/config/transport.hpp"
+#include "arude/config/transport_file.hpp"
+
+// Out of the sorted group above because it is conditional. The HTTPS transport
+// is the one part of libarude that has to be asked for, since TLS is a
+// dependency the build cannot fetch on its own; see the header for why.
+#if (defined ARUDE_HTTPS)
+  #include "arude/config/transport_https.hpp"
+#endif // #if (defined ARUDE_HTTPS)
 
 ///
 /// Configuration types, and the reading, writing and versioning of them.
