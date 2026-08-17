@@ -61,6 +61,7 @@
 /// | [enum_type_name][type_name] | Name of the enumeration type itself, unqualified. |
 /// | [enum_value][value] | The enumerator at an index, which must be less than enum_count(). |
 /// | [enum_values][values] | The enumerators, ordered by underlying value. |
+/// | [bitwise_operators][bitwise] | The \|, &, ^, ~ and compound operators for flag enumerations. |
 ///
 /// [cast]: https://github.com/Neargye/magic_enum/blob/v0.9.8/doc/reference.md#enum_cast
 /// [contains]: https://github.com/Neargye/magic_enum/blob/v0.9.8/doc/reference.md#enum_contains
@@ -73,6 +74,7 @@
 /// [type_name]: https://github.com/Neargye/magic_enum/blob/v0.9.8/doc/reference.md#enum_type_name
 /// [value]: https://github.com/Neargye/magic_enum/blob/v0.9.8/doc/reference.md#enum_value
 /// [values]: https://github.com/Neargye/magic_enum/blob/v0.9.8/doc/reference.md#enum_values
+/// [bitwise]: https://github.com/Neargye/magic_enum/blob/v0.9.8/doc/reference.md
 ///
 /// \see https://github.com/Neargye/magic_enum/blob/v0.9.8/doc/reference.md
 ///
@@ -111,6 +113,28 @@ using magic_enum::enum_names;
 using magic_enum::enum_type_name;
 using magic_enum::enum_value;
 using magic_enum::enum_values;
+
+///
+/// The bitwise operators for flag enumerations, re-exported from magic_enum.
+/// magic_enum keeps them in a namespace of their own so that they are opt-in:
+/// an enumeration that is not a flag should not silently gain a |. Bring them
+/// in with a using-directive at block scope, or qualify the call, wherever a
+/// flag enumeration is combined.
+///
+/// \see https://github.com/Neargye/magic_enum/blob/v0.9.8/doc/reference.md
+///
+namespace bitwise_operators
+{
+
+using magic_enum::bitwise_operators::operator&;
+using magic_enum::bitwise_operators::operator&=;
+using magic_enum::bitwise_operators::operator^;
+using magic_enum::bitwise_operators::operator^=;
+using magic_enum::bitwise_operators::operator|;
+using magic_enum::bitwise_operators::operator|=;
+using magic_enum::bitwise_operators::operator~;
+
+} // namespace bitwise_operators
 
 ///
 /// Converts an underlying integer to the enumeration value, throwing if it is not one.

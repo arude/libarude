@@ -11,6 +11,8 @@
 ///
 #pragma once
 
+#include <type_traits>
+
 namespace arude
 {
 
@@ -22,6 +24,12 @@ namespace arude
 /// checking what is done with it, to the point of instantiation. Nothing has to
 /// be done with TDependency for that — a template parameter appearing as a
 /// template argument is enough.
+///
+/// The conditional form below is what keeps the name dependent. An alias that
+/// substituted TDependency away outright would collapse to T, and a compiler
+/// canonicalising the type would see a non-dependent name again and check it
+/// where it is parsed. The always-true condition cannot be collapsed: its
+/// value depends on TDependency, so the canonical type stays dependent.
 ///
 /// The use is a class template that has to name, or reach through, a type that
 /// is still incomplete where the template is parsed and complete by the time it
@@ -42,6 +50,6 @@ namespace arude
 /// \tparam T Type named. Yielded unchanged, and need not be complete.
 ///
 template<typename TDependency, typename T>
-using dependent_t = T;
+using dependent_t = std::conditional_t<std::is_same_v<TDependency, TDependency>, T, T>;
 
 } // namespace arude
