@@ -16,15 +16,14 @@ A utility and helper library for C++ projects.
 Requires CMake 4.2 or newer, Ninja, and a C++23-capable compiler — Clang 21 is
 what the project is developed against. The first configure downloads
 [magic_enum](https://github.com/Neargye/magic_enum),
-[reflect-cpp](https://github.com/getml/reflect-cpp),
-[Boost.URL](https://github.com/boostorg/url) and Catch2 through
+[reflect-cpp](https://github.com/getml/reflect-cpp) and Catch2 through
 [CPM](https://github.com/cpm-cmake/CPM.cmake), so it needs network access; later
-ones do not. `-DARUDE_NO_CONFIG=ON` skips reflect-cpp and Boost.
+ones do not. `-DARUDE_NO_CONFIG=ON` skips reflect-cpp.
 
 Of those, only Catch2 is test-only. magic_enum is header-only and MIT licensed,
-and reflect-cpp and Boost.URL come with the configuration support: all three are
-part of the library itself, so a consumer of the enum helpers or of
-`arude/config.hpp` gets their headers on its include path.
+and reflect-cpp comes with the configuration support: both are part of the
+library itself, so a consumer of the enum helpers or of `arude/config.hpp`
+gets their headers on its include path.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
@@ -76,7 +75,8 @@ speed mid-run; results will be noisy.
 | `ARUDE_CXX_STANDARD` | `26`, or `23` if the compiler cannot do 26 | Language standard |
 | `BUILD_TESTING` | `ON` | `OFF` skips the Catch2 download and the test target |
 | `ARUDE_BUILD_BENCHMARKS` | `ON` | `OFF` skips the Google Benchmark download and its target |
-| `ARUDE_NO_CONFIG` | `OFF` | `ON` skips the reflect-cpp and Boost downloads, and with them `arude/config.hpp` |
+| `ARUDE_NO_CONFIG` | `OFF` | `ON` skips the reflect-cpp download, and with it `arude/config.hpp` |
+| `ARUDE_HTTPS` | `OFF` | `ON` adds the HTTPS configuration transport: downloads cpp-httplib and needs a TLS backend on the machine |
 | `ARUDE_ENABLE_COVERAGE` | `OFF` | Adds `--coverage` instrumentation, for the coverage job |
 | `CMAKE_BUILD_TYPE` | — | `Debug` or `Release` |
 

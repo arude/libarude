@@ -35,6 +35,7 @@ module;
 #include "arude/hello_world.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/type_name.hpp"
+#include "arude/type_traits.hpp"
 
 // Out of the sorted group above because it is conditional, and guarded exactly
 // as arude/arude.hpp guards it. This pulls reflect-cpp's and Boost.URL's
@@ -85,7 +86,7 @@ namespace arude::config::detail
 // and so a module consumer formatting an enum of its own is relying on that
 // partial specialization surviving the prune rather than on anything here.
 using binary_reflector_t = rfl::Reflector<arude::config::binary>;
-using config_errors_formatter_t = std::formatter<arude::config::config_manager::errors>;
+using config_errors_formatter_t = std::formatter<arude::config::config_error>;
 
 } // namespace arude::config::detail
 
@@ -119,6 +120,7 @@ using ::arude::enum_type_name;
 using ::arude::enum_value;
 using ::arude::enum_values;
 
+using ::arude::dependent_t;
 using ::arude::exception;
 using ::arude::exception_base;
 using ::arude::exception_report;
@@ -128,9 +130,26 @@ using ::arude::exception_user_data_c;
 using ::arude::hello_world;
 using ::arude::noncopyable;
 using ::arude::stacktrace_available;
+using ::arude::type_key;
 using ::arude::type_name;
 
 } // namespace arude
+
+// The bitwise operators for flag enumerations, re-exported the way
+// arude/enum.hpp keeps them: a namespace of their own, brought in with a
+// using-directive where flags are combined.
+export namespace arude::bitwise_operators
+{
+
+using magic_enum::bitwise_operators::operator&;
+using magic_enum::bitwise_operators::operator&=;
+using magic_enum::bitwise_operators::operator^;
+using magic_enum::bitwise_operators::operator^=;
+using magic_enum::bitwise_operators::operator|;
+using magic_enum::bitwise_operators::operator|=;
+using magic_enum::bitwise_operators::operator~;
+
+} // namespace arude::bitwise_operators
 
 export namespace arude::detail
 {
@@ -152,40 +171,47 @@ using ::arude::detail::source_location_formatter_t;
 export namespace arude::config
 {
 
+using ::arude::config::as_bytes;
+using ::arude::config::as_text;
 using ::arude::config::base64_decode;
 using ::arude::config::base64_decoded_size;
 using ::arude::config::base64_encode;
 using ::arude::config::base64_encoded_size;
 using ::arude::config::binary;
 using ::arude::config::byte_range_c;
+using ::arude::config::config_document_handle;
+using ::arude::config::config_error;
+using ::arude::config::config_handle;
 using ::arude::config::config_manager;
-using ::arude::config::config_test_t;
-using ::arude::config::config_test_v1;
-using ::arude::config::config_test_v2;
 using ::arude::config::configuration_c;
-using ::arude::config::create_uri;
 using ::arude::config::downgradable_configuration_c;
-using ::arude::config::downgrade;
 using ::arude::config::endpoint_c;
 using ::arude::config::endpoint_toml;
+using ::arude::config::endpoint_toml_options;
+using ::arude::config::exception_t;
 using ::arude::config::from_toml;
 using ::arude::config::from_toml_migrated;
 using ::arude::config::has_previous_configuration_c;
 using ::arude::config::is_set;
-using ::arude::config::load;
-using ::arude::config::load_migrated;
+using ::arude::config::load_policy;
 using ::arude::config::migrate;
-using ::arude::config::operator&;
-using ::arude::config::operator|;
-using ::arude::config::store;
+using ::arude::config::path_transport_c;
 using ::arude::config::to_toml;
 using ::arude::config::toml_version;
+using ::arude::config::transport_c;
+using ::arude::config::transport_file;
 using ::arude::config::upgradable_configuration_c;
-using ::arude::config::upgrade;
-using ::arude::config::uri_scheme;
-using ::arude::config::uri_transport_file;
 using ::arude::config::version_of;
 using ::arude::config::version_t;
+
+  // The HTTPS transport is exported only where the build has it, on the same
+  // condition arude/config.hpp includes it on.
+  #if (defined ARUDE_HTTPS)
+
+using ::arude::config::transport_https;
+using ::arude::config::transport_https_options;
+
+  #endif // #if (defined ARUDE_HTTPS)
 
 } // namespace arude::config
 

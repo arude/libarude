@@ -7,9 +7,9 @@
 /// LICENSING.md for the alternative MIT license available by arrangement.
 ///
 
-#include "arude/config/config_test_v1.hpp"
-#include "arude/config/config_test_v2.hpp"
 #include "arude/config/migration.hpp"
+#include "test/helpers/config_test_v1.hpp"
+#include "test/helpers/config_test_v2.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -17,6 +17,8 @@
 #include <cstddef>
 #include <type_traits>
 
+namespace
+{
 namespace migration_test
 {
 
@@ -26,14 +28,16 @@ namespace migration_test
 ///
 /// \return The configuration.
 ///
-[[nodiscard]] constexpr auto make_v1() -> arude::config::config_test_v1
+[[nodiscard]] constexpr auto make_v1() -> test_helpers::config_test_v1
 {
   constexpr auto secret = std::array{std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
 
-  return arude::config::config_test_v1{.name = "example", .retries = 7, .secret = arude::config::binary{secret}};
+  return test_helpers::config_test_v1{.name = "example", .retries = 7, .secret = arude::config::binary{secret}};
 }
 
 } // namespace migration_test
+
+} // namespace
 
 SCENARIO("a configuration states its version", "[config][migration]")
 {
@@ -41,21 +45,21 @@ SCENARIO("a configuration states its version", "[config][migration]")
   {
     THEN("each satisfies the concept and names its own number")
     {
-      STATIC_REQUIRE(arude::config::configuration_c<arude::config::config_test_v1>);
-      STATIC_REQUIRE(arude::config::configuration_c<arude::config::config_test_v2>);
-      STATIC_REQUIRE(arude::config::version_of<arude::config::config_test_v1>() == 1);
-      STATIC_REQUIRE(arude::config::version_of<arude::config::config_test_v2>() == 2);
+      STATIC_REQUIRE(arude::config::configuration_c<test_helpers::config_test_v1>);
+      STATIC_REQUIRE(arude::config::configuration_c<test_helpers::config_test_v2>);
+      STATIC_REQUIRE(arude::config::version_of<test_helpers::config_test_v1>() == 1);
+      STATIC_REQUIRE(arude::config::version_of<test_helpers::config_test_v2>() == 2);
     }
 
     THEN("the member carried in the file agrees with the constant")
     {
-      STATIC_REQUIRE(arude::config::config_test_v1{}.version == arude::config::config_test_v1::config_version);
-      STATIC_REQUIRE(arude::config::config_test_v2{}.version == arude::config::config_test_v2::config_version);
+      STATIC_REQUIRE(test_helpers::config_test_v1{}.version == test_helpers::config_test_v1::config_version);
+      STATIC_REQUIRE(test_helpers::config_test_v2{}.version == test_helpers::config_test_v2::config_version);
     }
 
     THEN("the current alias is the newest of them")
     {
-      STATIC_REQUIRE(std::is_same_v<arude::config::config_test_t, arude::config::config_test_v2>);
+      STATIC_REQUIRE(std::is_same_v<test_helpers::config_test_t, test_helpers::config_test_v2>);
     }
   }
 
@@ -75,25 +79,25 @@ SCENARIO("the versions are linked in both directions", "[config][migration]")
   {
     THEN("it names version 1 as the one before it")
     {
-      STATIC_REQUIRE(arude::config::has_previous_configuration_c<arude::config::config_test_v2>);
-      STATIC_REQUIRE(std::is_same_v<arude::config::config_test_v2::previous_t, arude::config::config_test_v1>);
+      STATIC_REQUIRE(arude::config::has_previous_configuration_c<test_helpers::config_test_v2>);
+      STATIC_REQUIRE(std::is_same_v<test_helpers::config_test_v2::previous_t, test_helpers::config_test_v1>);
     }
 
     THEN("version 1 names nothing before it, which is what ends the chain")
     {
-      STATIC_REQUIRE(!arude::config::has_previous_configuration_c<arude::config::config_test_v1>);
+      STATIC_REQUIRE(!arude::config::has_previous_configuration_c<test_helpers::config_test_v1>);
     }
 
     THEN("the steps between the two exist")
     {
-      STATIC_REQUIRE(arude::config::upgradable_configuration_c<arude::config::config_test_v1>);
-      STATIC_REQUIRE(arude::config::downgradable_configuration_c<arude::config::config_test_v2>);
+      STATIC_REQUIRE(arude::config::upgradable_configuration_c<test_helpers::config_test_v1>);
+      STATIC_REQUIRE(arude::config::downgradable_configuration_c<test_helpers::config_test_v2>);
     }
 
     THEN("the ends of the chain have no step past them")
     {
-      STATIC_REQUIRE(!arude::config::downgradable_configuration_c<arude::config::config_test_v1>);
-      STATIC_REQUIRE(!arude::config::upgradable_configuration_c<arude::config::config_test_v2>);
+      STATIC_REQUIRE(!arude::config::downgradable_configuration_c<test_helpers::config_test_v1>);
+      STATIC_REQUIRE(!arude::config::upgradable_configuration_c<test_helpers::config_test_v2>);
     }
   }
 }
@@ -106,7 +110,7 @@ SCENARIO("upgrade carries a configuration forward", "[config][migration]")
 
     WHEN("it is upgraded")
     {
-      const auto upgraded = arude::config::upgrade(val);
+      const auto upgraded = test_helpers::upgrade(val);
 
       THEN("what version 2 kept comes across unchanged")
       {
@@ -132,12 +136,12 @@ SCENARIO("downgrade drops what the older version cannot hold", "[config][migrati
 {
   GIVEN("a version 2 configuration with an endpoint")
   {
-    auto val = arude::config::upgrade(migration_test::make_v1());
+    auto val = test_helpers::upgrade(migration_test::make_v1());
     val.endpoint = "example.invalid";
 
     WHEN("it is downgraded and upgraded again")
     {
-      const auto round_trip = arude::config::upgrade(arude::config::downgrade(val));
+      const auto round_trip = test_helpers::upgrade(test_helpers::downgrade(val));
 
       THEN("everything version 1 can hold survives")
       {
@@ -162,11 +166,11 @@ SCENARIO("migrate walks the chain in either direction", "[config][migration]")
 
     WHEN("it is migrated to the current version")
     {
-      const auto migrated = arude::config::migrate<arude::config::config_test_t>(val);
+      const auto migrated = arude::config::migrate<test_helpers::config_test_t>(val);
 
       THEN("it arrives as version 2, carrying what it had")
       {
-        STATIC_REQUIRE(std::is_same_v<decltype(migrated), const arude::config::config_test_v2>);
+        STATIC_REQUIRE(std::is_same_v<decltype(migrated), const test_helpers::config_test_v2>);
         REQUIRE(migrated.version == 2);
         REQUIRE(migrated.name == val.name);
       }
@@ -174,7 +178,7 @@ SCENARIO("migrate walks the chain in either direction", "[config][migration]")
 
     WHEN("it is migrated to its own version")
     {
-      const auto migrated = arude::config::migrate<arude::config::config_test_v1>(val);
+      const auto migrated = arude::config::migrate<test_helpers::config_test_v1>(val);
 
       THEN("it is copied rather than sent through a step")
       {
@@ -186,15 +190,15 @@ SCENARIO("migrate walks the chain in either direction", "[config][migration]")
 
   GIVEN("a version 2 configuration")
   {
-    const auto val = arude::config::upgrade(migration_test::make_v1());
+    const auto val = test_helpers::upgrade(migration_test::make_v1());
 
     WHEN("it is migrated back to version 1")
     {
-      const auto migrated = arude::config::migrate<arude::config::config_test_v1>(val);
+      const auto migrated = arude::config::migrate<test_helpers::config_test_v1>(val);
 
       THEN("it arrives as version 1")
       {
-        STATIC_REQUIRE(std::is_same_v<decltype(migrated), const arude::config::config_test_v1>);
+        STATIC_REQUIRE(std::is_same_v<decltype(migrated), const test_helpers::config_test_v1>);
         REQUIRE(migrated.version == 1);
         REQUIRE(migrated.retries == val.retries);
       }
@@ -205,9 +209,9 @@ SCENARIO("migrate walks the chain in either direction", "[config][migration]")
   {
     THEN("a migration is one too, because every step is")
     {
-      STATIC_REQUIRE(arude::config::migrate<arude::config::config_test_v2>(migration_test::make_v1()).retries == 7);
+      STATIC_REQUIRE(arude::config::migrate<test_helpers::config_test_v2>(migration_test::make_v1()).retries == 7);
       STATIC_REQUIRE(
-        arude::config::migrate<arude::config::config_test_v2>(migration_test::make_v1()).endpoint == "localhost");
+        arude::config::migrate<test_helpers::config_test_v2>(migration_test::make_v1()).endpoint == "localhost");
     }
   }
 }

@@ -6,22 +6,26 @@
 /// libarude is dual licensed. See LICENSE for the AGPLv3 terms, and
 /// LICENSING.md for the alternative MIT license available by arrangement.
 ///
-/// Version 2 of the worked example configuration, and the step to and from
-/// version 1.
+/// Version 2 of the example configuration, and the step to and from version 1.
 ///
 /// The pattern a version 3 would follow: include the version before it, name
 /// it as previous_t, declare upgrade() and downgrade() for the one step
 /// between the two, and move config_test_t here. Version 1 is not touched.
 ///
+/// upgrade() and downgrade() sit in this namespace deliberately. Nothing calls
+/// them by qualified name — arude::config::migrate() calls them unqualified and
+/// argument-dependent lookup finds them beside the types they convert, which is
+/// what lets a consumer keep its configurations in a namespace of its own.
+///
 #pragma once
 
-#include "arude/config/config_test_v1.hpp"
 #include "arude/config/migration.hpp"
+#include "test/helpers/config_test_v1.hpp"
 
 #include <cstdint>
 #include <string>
 
-namespace arude::config
+namespace test_helpers
 {
 
 ///
@@ -38,12 +42,12 @@ struct config_test_v2
   ///
   /// \see config_test_v1::config_version
   ///
-  static constexpr auto config_version = version_t{2};
+  static constexpr auto config_version = arude::config::version_t{2};
 
   ///
   /// \see config_test_v1::version
   ///
-  version_t version = config_version;
+  arude::config::version_t version = config_version;
 
   ///
   /// \see config_test_v1::name
@@ -57,22 +61,22 @@ struct config_test_v2
 
   ///
   /// Host the configured service is reached at.
-  /// New in version 2. A version 1 file has nothing to say about it, so an
-  /// upgraded configuration takes the default below.
+  /// New in version 2. Version 1 has nothing to say about it, so an upgraded
+  /// configuration takes the default below.
   ///
   std::string endpoint = "localhost";
 
   ///
   /// \see config_test_v1::secret
   ///
-  binary secret;
+  arude::config::binary secret;
 };
 
 ///
-/// The version of the example configuration this build uses.
-/// Moves to the newest version as one is added, so an application that spells
-/// its configuration config_test_t follows along by recompiling. The version
-/// types themselves stay where they are.
+/// The version of the example configuration the tests use.
+/// Moves to the newest version as one is added, so a test that spells the
+/// configuration config_test_t follows along by recompiling. The version types
+/// themselves stay where they are.
 ///
 using config_test_t = config_test_v2;
 
@@ -91,7 +95,7 @@ using config_test_t = config_test_v2;
 /// endpoint is dropped, because version 1 has nowhere to keep it: downgrading
 /// and upgrading again returns the default rather than what was there. That is
 /// what makes this lossy, and it is the reason to keep the newest version's
-/// file around rather than overwrite it with a downgraded one.
+/// text around rather than overwrite it with a downgraded one.
 ///
 /// \param val Configuration to downgrade. Not retained.
 /// \return The same configuration as version 1, less what version 1 cannot hold.
@@ -112,4 +116,4 @@ constexpr auto downgrade(const config_test_v2& val) -> config_test_v1
   return config_test_v1{.name = val.name, .retries = val.retries, .secret = val.secret};
 }
 
-} // namespace arude::config
+} // namespace test_helpers

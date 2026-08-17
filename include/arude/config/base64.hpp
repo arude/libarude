@@ -59,7 +59,7 @@ consteval auto make_base64_decode_table() -> std::array<std::int8_t, 256>
   auto table = std::array<std::int8_t, 256>{};
   table.fill(base64_invalid);
 
-  for(auto index = std::size_t{0}; index < base64_alphabet.size(); ++index)
+  for(auto index = decltype(base64_alphabet.size()){0}; index < base64_alphabet.size(); ++index)
   {
     table.at(static_cast<unsigned char>(base64_alphabet.at(index))) = static_cast<std::int8_t>(index);
   }
@@ -144,13 +144,43 @@ namespace arude::config
 {
 
 ///
+/// The string type used for base64 text.
+///
+using base64_string_t = std::string;
+
+///
+/// The byte type used for base64 data.
+///
+using base64_byte_t = std::byte;
+
+///
+/// The byte owning container type used for base64 data.
+///
+using base64_bytes_t = std::vector<base64_byte_t>;
+
+///
+/// The size type used for base64 operations.
+///
+using base64_size_t = std::size_t;
+
+///
+/// The view type used for base64 text.
+///
+using base64_view_t = std::string_view;
+
+///
+/// The span type used for base64 data.
+///
+using base64_span_t = std::span<const base64_byte_t>;
+
+///
 /// Number of base64 characters a given number of bytes encodes to.
 /// Counts the padding, so the result is always a multiple of four.
 ///
 /// \param size Number of bytes to encode.
 /// \return Length of the encoded text, in characters.
 ///
-[[nodiscard]] constexpr auto base64_encoded_size(std::size_t size) -> std::size_t;
+[[nodiscard]] constexpr auto base64_encoded_size(base64_size_t size) -> base64_size_t;
 
 ///
 /// Number of bytes a base64 text decodes to.
@@ -161,43 +191,39 @@ namespace arude::config
 /// \param text Encoded text. Not retained.
 /// \return Number of bytes the text would decode to.
 ///
-[[nodiscard]] constexpr auto base64_decoded_size(std::string_view text) -> std::size_t;
+[[nodiscard]] constexpr auto base64_decoded_size(base64_view_t text) -> base64_size_t;
 
 ///
 /// Encodes bytes as base64, per RFC 4648 section 4.
-/// The output is padded and carries no line breaks, which is what a
-/// configuration file wants: the value has to survive being a single TOML
-/// string.
+/// The output is padded and carries no line breaks.
 ///
-/// \param data Bytes to encode. Not retained.
+/// \param data Bytes to encode.
 /// \return The encoded text, its length a multiple of four.
 ///
-[[nodiscard]] constexpr auto base64_encode(std::span<const std::byte> data) -> std::string;
+[[nodiscard]] constexpr auto base64_encode(base64_span_t data) -> base64_string_t;
 
 ///
 /// Decodes base64 text back into bytes.
 /// Strict on purpose: the length must be a multiple of four, every character
-/// must be in the alphabet, and padding may only close the final group. A
-/// configuration file that has been edited by hand into something invalid
-/// should say so rather than decode to quietly different bytes. Whitespace and
+/// must be in the alphabet, and padding may only close the final group. Whitespace and
 /// line breaks are not accepted, because base64_encode() never produces any.
 ///
-/// \param text Encoded text. Not retained.
+/// \param text Encoded text.
 /// \return The decoded bytes.
 /// \throws arude::exception If the text is not valid base64.
 ///
-[[nodiscard]] constexpr auto base64_decode(std::string_view text) -> std::vector<std::byte>;
+[[nodiscard]] constexpr auto base64_decode(base64_view_t text) -> base64_bytes_t;
 
 ///
 ///
-constexpr auto base64_encoded_size(const std::size_t size) -> std::size_t
+constexpr auto base64_encoded_size(const base64_size_t size) -> base64_size_t
 {
   return ((size + 2) / 3) * 4;
 }
 
 ///
 ///
-constexpr auto base64_decoded_size(const std::string_view text) -> std::size_t
+constexpr auto base64_decoded_size(const base64_view_t text) -> base64_size_t
 {
   if(text.size() < 4)
   {
@@ -221,15 +247,15 @@ constexpr auto base64_decoded_size(const std::string_view text) -> std::size_t
 
 ///
 ///
-constexpr auto base64_encode(const std::span<const std::byte> data) -> std::string
+constexpr auto base64_encode(const base64_span_t data) -> base64_string_t
 {
-  auto text = std::string{};
+  auto text = base64_string_t{};
   text.reserve(base64_encoded_size(data.size()));
 
   // Three bytes become four characters. The last group is short where the
   // input does not divide by three, and the missing bytes are encoded as zero
   // bits and then written as padding rather than as alphabet characters.
-  for(auto pos = std::size_t{0}; pos < data.size(); pos += 3)
+  for(auto pos = decltype(data.size()){0}; pos < data.size(); pos += 3)
   {
     const auto remaining = data.size() - pos;
     const auto first = std::to_integer<std::uint32_t>(data[pos]);
@@ -248,7 +274,7 @@ constexpr auto base64_encode(const std::span<const std::byte> data) -> std::stri
 
 ///
 ///
-constexpr auto base64_decode(const std::string_view text) -> std::vector<std::byte>
+constexpr auto base64_decode(const base64_view_t text) -> base64_bytes_t
 {
   if(text.size() % 4 != 0)
   {
@@ -256,25 +282,25 @@ constexpr auto base64_decode(const std::string_view text) -> std::vector<std::by
       std::format("arude::config: base64 text of length {} is not a multiple of four characters.", text.size())};
   }
 
-  auto data = std::vector<std::byte>{};
+  auto data = base64_bytes_t{};
   data.reserve(base64_decoded_size(text));
 
   // Four characters become three bytes, one fewer for each padding character
   // the last group carries.
-  for(auto pos = std::size_t{0}; pos < text.size(); pos += 4)
+  for(auto pos = decltype(text.size()){0}; pos < text.size(); pos += 4)
   {
     const auto group = detail::decode_base64_group(text.substr(pos, 4), pos + 4 == text.size());
 
-    data.push_back(static_cast<std::byte>((group.bits >> 16U) & 0xFFU));
+    data.push_back(static_cast<base64_byte_t>((group.bits >> 16U) & 0xFFU));
 
     if(group.padding < 2)
     {
-      data.push_back(static_cast<std::byte>((group.bits >> 8U) & 0xFFU));
+      data.push_back(static_cast<base64_byte_t>((group.bits >> 8U) & 0xFFU));
     }
 
     if(group.padding < 1)
     {
-      data.push_back(static_cast<std::byte>(group.bits & 0xFFU));
+      data.push_back(static_cast<base64_byte_t>(group.bits & 0xFFU));
     }
   }
 

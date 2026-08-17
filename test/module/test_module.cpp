@@ -66,6 +66,11 @@ SCENARIO("the module exports the public interface", "[module]")
       STATIC_REQUIRE(arude::type_name<int>() == "int");
     }
 
+    THEN("dependent_t is reachable and still transparent")
+    {
+      STATIC_REQUIRE(std::is_same_v<arude::dependent_t<int, module_test::widget>, module_test::widget>);
+    }
+
     THEN("hello_world is reachable, so out-of-line definitions link")
     {
       REQUIRE(arude::hello_world(42) == 42);
@@ -279,16 +284,123 @@ SCENARIO("a throw from a header consumer is caught by an importer", "[module]")
 // arrives from the library target, so this file still includes no arude header.
 #if !(defined ARUDE_NO_CONFIG)
 
+namespace module_test
+{
+
+///
+/// A module consumer's own configuration, version 1.
+/// Declared here rather than taken from the library, because the library ships
+/// no configuration type: what has to work is the versioning machinery applied
+/// to a type the module has never seen, which is what a consumer actually has.
+///
+struct app_config_v1
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// Name this configuration is known by.
+  ///
+  std::string name = "module";
+
+  ///
+  /// Opaque payload, written as base64 text.
+  ///
+  arude::config::binary secret;
+};
+
+///
+/// The same configuration, version 2.
+///
+struct app_config_v2
+{
+  ///
+  /// The version before this one, which migration walks back through.
+  ///
+  using previous_t = app_config_v1;
+
+  ///
+  /// \see app_config_v1::config_version
+  ///
+  static constexpr auto config_version = arude::config::version_t{2};
+
+  ///
+  /// \see app_config_v1::version
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// \see app_config_v1::name
+  ///
+  std::string name = "module";
+
+  ///
+  /// Host the configured service is reached at. New in version 2.
+  ///
+  std::string endpoint = "localhost";
+
+  ///
+  /// \see app_config_v1::secret
+  ///
+  arude::config::binary secret;
+};
+
+///
+/// The version this consumer builds against.
+///
+using app_config_t = app_config_v2;
+
+///
+/// Produces a version 2 configuration from a version 1 one.
+/// Found by argument-dependent lookup from arude::config::migrate, which is
+/// the whole mechanism: the step lives beside the types, in the consumer's
+/// namespace, and the library never sees it declared.
+///
+/// \param val Configuration to upgrade. Not retained.
+/// \return The same configuration as version 2.
+///
+[[nodiscard]] constexpr auto upgrade(const app_config_v1& val) -> app_config_v2;
+
+///
+/// Produces a version 1 configuration from a version 2 one.
+/// \param val Configuration to downgrade. Not retained.
+/// \return The same configuration as version 1, less what version 1 cannot hold.
+///
+[[nodiscard]] constexpr auto downgrade(const app_config_v2& val) -> app_config_v1;
+
+///
+///
+constexpr auto upgrade(const app_config_v1& val) -> app_config_v2
+{
+  return app_config_v2{.name = val.name, .secret = val.secret};
+}
+
+///
+///
+constexpr auto downgrade(const app_config_v2& val) -> app_config_v1
+{
+  return app_config_v1{.name = val.name, .secret = val.secret};
+}
+
+} // namespace module_test
+
 SCENARIO("the module exports the configuration interface", "[module][config]")
 {
   GIVEN("nothing imported but arude")
   {
     THEN("the concepts and the version arithmetic came across")
     {
-      STATIC_REQUIRE(arude::config::configuration_c<arude::config::config_test_t>);
+      STATIC_REQUIRE(arude::config::configuration_c<module_test::app_config_t>);
       STATIC_REQUIRE(arude::config::endpoint_c<arude::config::endpoint_toml>);
-      STATIC_REQUIRE(std::is_same_v<arude::config::config_test_t, arude::config::config_test_v2>);
-      STATIC_REQUIRE(arude::config::version_of<arude::config::config_test_v2>() == 2);
+      STATIC_REQUIRE(std::is_same_v<module_test::app_config_t, module_test::app_config_v2>);
+      STATIC_REQUIRE(arude::config::version_of<module_test::app_config_v2>() == 2);
     }
 
     THEN("base64 came across and is still constexpr")
@@ -298,7 +410,7 @@ SCENARIO("the module exports the configuration interface", "[module][config]")
 
     THEN("a migration runs, so the steps came across with the types")
     {
-      REQUIRE(arude::config::migrate<arude::config::config_test_v2>(arude::config::config_test_v1{}).version == 2);
+      REQUIRE(arude::config::migrate<module_test::app_config_v2>(module_test::app_config_v1{}).version == 2);
     }
   }
 }
@@ -313,12 +425,12 @@ SCENARIO("the module carries the configuration specializations", "[module][confi
     auto payload = arude::config::binary{};
     payload.base64("Zm9v");
 
-    const auto text = arude::config::to_toml(arude::config::config_test_t{.secret = payload});
+    const auto text = arude::config::to_toml(module_test::app_config_t{.secret = payload});
 
     THEN("the reflector stored it as base64, and reads it back")
     {
       REQUIRE(text.contains("Zm9v"));
-      REQUIRE(arude::config::from_toml<arude::config::config_test_t>(text).secret == payload);
+      REQUIRE(arude::config::from_toml<module_test::app_config_t>(text).secret == payload);
     }
   }
 
@@ -326,8 +438,8 @@ SCENARIO("the module carries the configuration specializations", "[module][confi
   {
     THEN("it formats as its name, which is what the formatter anchor is for")
     {
-      REQUIRE(std::format("{}", arude::config::config_manager::errors::io_error) == "io_error");
-      STATIC_REQUIRE(arude::enum_name(arude::config::config_manager::errors::not_found) == "not_found");
+      REQUIRE(std::format("{}", arude::config::config_manager::error_t::io_error) == "io_error");
+      STATIC_REQUIRE(arude::enum_name(arude::config::config_manager::error_t::not_found) == "not_found");
     }
   }
 }

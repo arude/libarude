@@ -19,6 +19,7 @@
 #include "arude/hello_world.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/type_name.hpp"
+#include "arude/type_traits.hpp"
 
 // Configuration support is part of libarude, so it is included unless the
 // build has declined it — ARUDE_NO_CONFIG is what the build defines to say

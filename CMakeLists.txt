@@ -82,29 +82,60 @@ if(NOT ARUDE_NO_CONFIG)
   set(REFLECTCPP_BUILD_TESTS OFF)
   set(REFLECTCPP_BUILD_BENCHMARKS OFF)
 
-  # Fetched by tag rather than as an archive: reflect-cpp keeps toml++ as a git
-  # submodule, and only a clone brings it along.
+  # reflect-cpp does not vendor toml++. Its CMakeLists calls find_package for it
+  # and then links tomlplusplus::tomlplusplus, so without one supplied here the
+  # generate step fails on a target that does not exist. find_package is guarded
+  # with "if(NOT TARGET tomlplusplus)", which is the hook for a parent project
+  # to bring its own — so this has to be added before reflect-cpp, not after.
+  # The version is what reflect-cpp 0.19.0 asks for in its vcpkg manifest.
+  CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")
+
   CPMAddPackage("gh:getml/reflect-cpp@0.19.0")
 
-  # Boost.URL parses the URIs a configuration source is named by. Boost ships a
-  # CMake release archive that builds a subset, so BOOST_INCLUDE_LIBRARIES is
-  # what keeps this to url and the handful of headers it needs rather than all
-  # of Boost.
-  CPMAddPackage(
-    NAME Boost
-    VERSION 1.88.0
-    URL https://github.com/boostorg/boost/releases/download/boost-1.88.0/boost-1.88.0-cmake.tar.xz
-    OPTIONS "BOOST_ENABLE_CMAKE ON" "BOOST_INCLUDE_LIBRARIES url"
-  )
-
   # Built at our standard for the same reason Catch2 is; see the comment there.
-  foreach(config_target IN ITEMS reflectcpp boost_url)
+  foreach(config_target IN ITEMS reflectcpp)
     if(TARGET ${config_target})
       set_target_properties(${config_target} PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
                                                         CXX_STANDARD_REQUIRED ON
                                                         CXX_EXTENSIONS OFF)
     endif()
   endforeach()
+endif()
+
+# ---- HTTPS transport ----
+
+# Positive, and off, where ARUDE_NO_CONFIG is negative and on. The polarity
+# follows the default rather than the other way round: configuration is part of
+# the library and is declined, while the HTTPS transport is asked for.
+#
+# It is asked for because it is the one thing here CPM cannot deliver whole.
+# cpp-httplib is a header and fetches like everything else, but TLS is not: it
+# needs OpenSSL, mbedTLS or wolfSSL on the machine, and a consumer reading its
+# configuration from a file — or from an EEPROM of its own — should not have to
+# find one.
+option(ARUDE_HTTPS "Build the HTTPS configuration transport" OFF)
+
+if(ARUDE_HTTPS AND ARUDE_NO_CONFIG)
+  message(
+    FATAL_ERROR
+      "libarude: ARUDE_HTTPS is a transport for the configuration support, which ARUDE_NO_CONFIG has switched off. "
+      "Turn one of the two around."
+  )
+endif()
+
+if(ARUDE_HTTPS)
+  # cpp-httplib finds the TLS backend itself and puts both the library and the
+  # CPPHTTPLIB_*_SUPPORT define on its own target, so nothing here has to name
+  # OpenSSL. Swapping the backend is HTTPLIB_REQUIRE_MBEDTLS or
+  # HTTPLIB_REQUIRE_WOLFSSL in place of this line.
+  set(HTTPLIB_REQUIRE_OPENSSL ON)
+  CPMAddPackage("gh:yhirose/cpp-httplib@0.51.0")
+
+  if(TARGET httplib)
+    set_target_properties(httplib PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                             CXX_STANDARD_REQUIRED ON
+                                             CXX_EXTENSIONS OFF)
+  endif()
 endif()
 
 # ---- Add source files ----
@@ -144,7 +175,7 @@ endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
 
 # PUBLIC for the same reason: arude/config/ is headers, so a consumer compiles
-# reflect-cpp's and Boost.URL's headers itself and links what they compile.
+# reflect-cpp's headers itself and links what they compile.
 #
 # The definition goes the same way round as the option: defined only when the
 # support was declined, so a consumer who builds against these headers without
@@ -152,7 +183,16 @@ target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
 if(ARUDE_NO_CONFIG)
   target_compile_definitions(${PROJECT_NAME} PUBLIC ARUDE_NO_CONFIG)
 else()
-  target_link_libraries(${PROJECT_NAME} PUBLIC reflectcpp Boost::url)
+  target_link_libraries(${PROJECT_NAME} PUBLIC reflectcpp)
+endif()
+
+# PUBLIC again: arude/config/transport_https.hpp includes httplib.h, so a
+# consumer of that header compiles it and needs the TLS backend behind it. The
+# definition is what makes the header reachable at all — it refuses to compile
+# without it, rather than going quiet and leaving the transport unregistered.
+if(ARUDE_HTTPS)
+  target_link_libraries(${PROJECT_NAME} PUBLIC httplib::httplib)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC ARUDE_HTTPS)
 endif()
 
 target_include_directories(

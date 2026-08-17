@@ -6,12 +6,17 @@
 /// libarude is dual licensed. See LICENSE for the AGPLv3 terms, and
 /// LICENSING.md for the alternative MIT license available by arrangement.
 ///
-/// Version 1 of the worked example configuration.
+/// Version 1 of the example configuration the tests migrate, store and load.
+///
+/// A fixture rather than library API: nothing in arude/config/ mentions it, and
+/// a consumer writes its own configuration types the way this pair is written.
+/// It lives here so the library ships no example type a consumer could mistake
+/// for something to build on.
 ///
 /// Released, and therefore frozen: what this type holds is what version 1
-/// means, and a file written by any build that had it still reads back here.
-/// A change to the configuration adds config_test_v2.hpp; it does not edit
-/// this file.
+/// means, and text written by any build that had it still reads back here. A
+/// change to the configuration adds config_test_v2.hpp; it does not edit this
+/// file.
 ///
 #pragma once
 
@@ -21,7 +26,7 @@
 #include <cstdint>
 #include <string>
 
-namespace arude::config
+namespace test_helpers
 {
 
 ///
@@ -37,14 +42,14 @@ struct config_test_v1
   /// Static, so it is available without a value in hand, and the one place the
   /// number is written down.
   ///
-  static constexpr auto config_version = version_t{1};
+  static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the file.
-  /// Initialised from config_version so the two cannot disagree; store()
-  /// writes the type's version regardless of what this holds.
+  /// The version carried in the text.
+  /// Initialised from config_version so the two cannot disagree; writing a
+  /// configuration stamps the type's version regardless of what this holds.
   ///
-  version_t version = config_version;
+  arude::config::version_t version = config_version;
 
   ///
   /// Name this configuration is known by.
@@ -57,9 +62,9 @@ struct config_test_v1
   std::uint32_t retries = 3;
 
   ///
-  /// Opaque payload, written to the file as base64 text.
+  /// Opaque payload, written as base64 text.
   ///
-  binary secret;
+  arude::config::binary secret;
 };
 
-} // namespace arude::config
+} // namespace test_helpers
