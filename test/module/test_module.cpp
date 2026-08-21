@@ -20,6 +20,7 @@
 
 #include <exception>
 #include <format>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -47,6 +48,50 @@ enum class colour
   green,
   blue
 };
+
+///
+/// Derived from the exported alias template, which is the only way to find out
+/// whether the class template it names came across too.
+/// The implementation is completed in this translation unit rather than in a
+/// second one: what is under test here is the export, not the hiding, which
+/// test/test_pimpl_owner.cpp covers.
+///
+class boxed final : private arude::pimpl_owner<boxed>
+{
+public:
+  class impl_t;
+
+  boxed();
+
+  [[nodiscard]] auto value() const -> int;
+};
+
+class boxed::impl_t final
+{
+public:
+  [[nodiscard]] auto value() const -> int;
+};
+
+///
+///
+auto boxed::impl_t::value() const -> int
+{
+  return 7;
+}
+
+///
+///
+boxed::boxed()
+  : pimpl_owner{std::make_unique<impl_t>()}
+{
+}
+
+///
+///
+auto boxed::value() const -> int
+{
+  return impl().value();
+}
 
 } // namespace module_test
 
@@ -82,6 +127,21 @@ SCENARIO("the module exports the public interface", "[module]")
       STATIC_REQUIRE(!std::is_copy_assignable_v<module_test::widget>);
       STATIC_REQUIRE(std::is_move_constructible_v<module_test::widget>);
       STATIC_REQUIRE(std::is_move_assignable_v<module_test::widget>);
+    }
+  }
+
+  // pimpl_owner is exported as an alias template, so this asks the same
+  // question one step further along: an alias that named nothing reachable
+  // would fail to serve as a base here.
+  GIVEN("a type derived from the exported pimpl_owner")
+  {
+    const auto boxed = module_test::boxed{};
+
+    THEN("the storage works and the type came out move-only")
+    {
+      REQUIRE(boxed.value() == 7);
+      STATIC_REQUIRE(!std::is_copy_constructible_v<module_test::boxed>);
+      STATIC_REQUIRE(std::is_move_constructible_v<module_test::boxed>);
     }
   }
 }

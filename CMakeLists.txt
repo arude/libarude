@@ -188,6 +188,11 @@ if(BUILD_TESTING)
   set_target_properties(${PROJECT_NAME}_test PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
                                                         CXX_STANDARD_REQUIRED ON
                                                         CXX_EXTENSIONS OFF)
+  # The project root, so a test that needs a second translation unit — test/pimpl
+  # holds the owners whose implementation must not be visible to the test itself
+  # — can include its header from the root the way docs/cpp-conventions.md asks
+  # rather than by relative path.
+  target_include_directories(${PROJECT_NAME}_test PRIVATE ${PROJECT_SOURCE_DIR})
   target_link_libraries(${PROJECT_NAME}_test PRIVATE ${PROJECT_NAME} Catch2::Catch2WithMain)
 
   # catch_discover_tests registers each test case with CTest individually.
