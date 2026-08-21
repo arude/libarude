@@ -28,6 +28,7 @@ module;
 #include "arude/exception_report.hpp"
 #include "arude/hello_world.hpp"
 #include "arude/noncopyable.hpp"
+#include "arude/pimpl_owner.hpp"
 #include "arude/type_name.hpp"
 
 export module arude;
@@ -88,6 +89,7 @@ using ::arude::exception_string_t;
 using ::arude::exception_user_data_c;
 using ::arude::hello_world;
 using ::arude::noncopyable;
+using ::arude::pimpl_owner;
 using ::arude::stacktrace_available;
 using ::arude::type_name;
 

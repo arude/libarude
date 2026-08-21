@@ -14,10 +14,12 @@
 /// individual headers where compile time matters.
 ///
 
+#include "arude/enum.hpp"
 #include "arude/exception.hpp"
 #include "arude/exception_report.hpp"
 #include "arude/hello_world.hpp"
 #include "arude/noncopyable.hpp"
+#include "arude/pimpl_owner.hpp"
 #include "arude/type_name.hpp"
 
 ///
