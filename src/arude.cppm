@@ -27,6 +27,7 @@ module;
 #include "arude/exception.hpp"
 #include "arude/exception_report.hpp"
 #include "arude/hello_world.hpp"
+#include "arude/non_owning_t.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"
 #include "arude/signal_owner.hpp"
@@ -89,6 +90,7 @@ using ::arude::exception_stacktrace_t;
 using ::arude::exception_string_t;
 using ::arude::exception_user_data_c;
 using ::arude::hello_world;
+using ::arude::non_owning_t;
 using ::arude::noncopyable;
 using ::arude::pimpl_owner;
 using ::arude::signal_owner;
