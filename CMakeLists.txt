@@ -74,6 +74,42 @@ include(cmake/CPM.cmake)
 # project, so as a subproject they are already off and need no overriding here.
 CPMAddPackage("gh:Neargye/magic_enum@0.9.8")
 
+# Logging is built on spdlog, which is a dependency of the library for the same
+# reason magic_enum is, and so is fetched here rather than behind a switch.
+#
+# Its example and install rules key off whether it is the top-level project, so
+# as a subproject they are already off; its tests and benchmarks default off
+# whoever builds it.
+
+# Format through std::format rather than through fmt. This takes
+# src/bundled_fmtlib_format.cpp out of spdlog's own source list, so no fmt is
+# compiled and no header of it is ever included, and no separate fmt package is
+# fetched either. What it cannot do is keep fmt off the disk: the bundled copy
+# lives inside spdlog's repository, so it arrives with the download and then
+# sits there unread.
+#
+# spdlog puts this definition on its target as PUBLIC, so our translation units
+# inherit it and cannot disagree with the compiled library about which
+# formatting back end is in use.
+set(SPDLOG_USE_STD_FORMAT ON)
+
+CPMAddPackage("gh:gabime/spdlog@1.17.0")
+
+# With the option above spdlog builds itself as C++20, which is the floor
+# std::format needs rather than the standard the rest of this project uses, and
+# that is not close enough. Its format_string_t is std::format_string only
+# where __cpp_lib_format reaches 202207L, which the standard libraries report
+# at C++23 and not at C++20, and a plain std::string_view below that. Left
+# alone, the compiled library takes one and the headers we include take the
+# other, under the same name — an ODR violation whether or not a given build
+# happens to survive it. Building spdlog at our standard keeps the two halves
+# in step, exactly as with Catch2 below.
+if(TARGET spdlog)
+  set_target_properties(spdlog PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                          CXX_STANDARD_REQUIRED ON
+                                          CXX_EXTENSIONS OFF)
+endif()
+
 # ---- Configuration support ----
 
 # Configuration support is part of libarude rather than an extra, so the option
@@ -194,6 +230,15 @@ set_target_properties(${PROJECT_NAME} PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDA
 # being a cross-platform target, we enforce standards conformance on MSVC
 target_compile_options(${PROJECT_NAME} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/permissive->")
 
+# /Zc:__cplusplus is for spdlog's sake, and PUBLIC for the same reason
+# /permissive- is: a header of ours includes spdlog, so whatever spdlog needs
+# of us, it needs of our consumers too. spdlog tests __cplusplus directly in a
+# header everyone sees, and MSVC reports 199711L without this flag whatever
+# standard is actually in force. spdlog passes the flag to its own compilation
+# and not to ours, so the two halves would disagree over whether C++14 exists
+# and take different definitions of spdlog::make_unique.
+target_compile_options(${PROJECT_NAME} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:__cplusplus>")
+
 # --coverage is understood by both GCC and Clang and emits gcov-format data.
 # PUBLIC so the test executable is instrumented and linked the same way.
 #
@@ -214,6 +259,11 @@ endif()
 # PUBLIC for the same reason: magic_enum is header-only, and a header of ours
 # that includes it puts it on every consumer's include path too.
 target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
+
+# PUBLIC as well, and for both halves of spdlog: a logging header of ours
+# includes it, which puts its headers on every consumer's include path, and the
+# compiled library has to be linked alongside them.
+target_link_libraries(${PROJECT_NAME} PUBLIC spdlog::spdlog)
 
 # PUBLIC for the same reason: the headers in arude/config/ include reflect-cpp's,
 # so a consumer compiles them itself and links what they compile. toml++ is named

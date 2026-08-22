@@ -118,14 +118,20 @@ rfl::TaggedUnion<"kind", circle, square> outline = square{};
 Requires CMake 4.2 or newer, Ninja, and a C++23-capable compiler — Clang 21 is
 what the project is developed against. The first configure downloads
 [magic_enum](https://github.com/Neargye/magic_enum),
+[spdlog](https://github.com/gabime/spdlog),
 [reflect-cpp](https://github.com/getml/reflect-cpp) and Catch2 through
 [CPM](https://github.com/cpm-cmake/CPM.cmake), so it needs network access; later
 ones do not. `-DARUDE_NO_CONFIG=ON` skips reflect-cpp.
 
-Of those, only Catch2 is test-only. magic_enum is header-only and MIT licensed,
-and reflect-cpp comes with the configuration support: both are part of the
-library itself, so a consumer of the enum helpers or of `arude/config.hpp`
-gets their headers on its include path.
+Of those, only Catch2 is test-only. magic_enum and spdlog are MIT licensed, and
+reflect-cpp comes with the configuration support: all three are part of the
+library itself, so a consumer of the enum helpers, the logging or
+`arude/config.hpp` gets their headers on its include path. spdlog — compiled
+rather than header-only — is linked in as well.
+
+spdlog formats through `std::format`, not through fmt. Nothing of fmt is
+compiled or included, and no fmt package is fetched; the bundled copy still
+arrives unused inside spdlog's own download, which is where it lives.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
