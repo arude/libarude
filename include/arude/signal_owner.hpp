@@ -191,9 +191,13 @@ public: // Structors
   ///         would go on to build a bundle out of it.
   /// \param args The arguments the bundle is built from.
   ///
+  // The constraint says signal_owner<T> where the injected-class-name would do,
+  // so that it is token for token what the out-of-line definition repeats. A
+  // declaration and its definition must carry equivalent constraints, and clang
+  // and MSVC reject the two spellings as different where GCC accepts them.
   template<typename... TArgs>
     requires detail::brace_constructible_c<T, TArgs...> &&
-             (!std::same_as<std::remove_cvref_t<TArgs>, signal_owner> && ...)
+             (!std::same_as<std::remove_cvref_t<TArgs>, signal_owner<T>> && ...)
   explicit signal_owner(TArgs&&... args);
 
 public: // Methods
