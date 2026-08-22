@@ -540,6 +540,19 @@ SCENARIO("a relay announces through its owner's bundle", "[signal_owner]")
       STATIC_REQUIRE(sizeof(signal_owner_test::widget_task) == sizeof(void*));
     }
 
+    // What the owner being held as a pointer rather than a reference buys. A
+    // reference member would delete both assignment operators, and the relay is
+    // a base rather than a member, so every relaying class would lose them with
+    // it. Asked here so that spelling the member as a reference fails the build
+    // rather than the documentation.
+    THEN("the relay can be assigned as well as copied")
+    {
+      STATIC_REQUIRE(std::is_copy_constructible_v<signal_owner_test::widget_task>);
+      STATIC_REQUIRE(std::is_copy_assignable_v<signal_owner_test::widget_task>);
+      STATIC_REQUIRE(std::is_move_constructible_v<signal_owner_test::widget_task>);
+      STATIC_REQUIRE(std::is_move_assignable_v<signal_owner_test::widget_task>);
+    }
+
     WHEN("the relay announces")
     {
       task.announce();
@@ -577,6 +590,28 @@ SCENARIO("a relay announces through its owner's bundle", "[signal_owner]")
       {
         REQUIRE(widget.sigs().changed == 1);
         REQUIRE(&copy.sigs() == &widget.sigs());
+      }
+    }
+  }
+
+  // Assignment is the other half of what a reference member would have cost:
+  // rebinding. A relay bound to one owner can be pointed at another afterwards.
+  GIVEN("a relay bound to the first of two owners")
+  {
+    auto first = signal_owner_test::widget{};
+    auto second = signal_owner_test::widget{};
+    auto task = signal_owner_test::widget_task{first};
+
+    WHEN("it is assigned a relay bound to the second")
+    {
+      task = signal_owner_test::widget_task{second};
+      task.announce();
+
+      THEN("it announces through the second owner and leaves the first as it was")
+      {
+        REQUIRE(&task.sigs() == &second.sigs());
+        REQUIRE(second.sigs().changed == 1);
+        REQUIRE(first.sigs().changed == 0);
       }
     }
   }

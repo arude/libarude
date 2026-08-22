@@ -157,6 +157,7 @@ SCENARIO("the module exports the public interface", "[module]")
       STATIC_REQUIRE(std::is_same_v<arude::exception_string_t, std::string>);
       STATIC_REQUIRE(arude::exception_user_data_c<int>);
       STATIC_REQUIRE(arude::exception_user_data_c<void>);
+      STATIC_REQUIRE(std::is_same_v<arude::non_owning_t<module_test::widget>, module_test::widget*>);
     }
 
     THEN("type_name is reachable and still constexpr")

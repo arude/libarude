@@ -8,6 +8,8 @@
 ///
 #pragma once
 
+#include "arude/non_owning_t.hpp"
+
 #include <concepts>
 #include <type_traits>
 #include <utility>
@@ -251,13 +253,14 @@ private: // Variables
 /// }
 /// \endcode
 ///
-/// What is stored is an arude::signal_owner_base*, rather than the owner's type
-/// or a pointer to its bundle, because neither is available where the member is
-/// declared: TSelf is incomplete while its own base is being instantiated, so
-/// TSelf::sigs_t cannot be looked up yet. The erased pointer needs nothing, and
-/// the lookup waits until sigs() is called, by which point TSelf is complete.
-/// The cast back on the way out is a downcast, and what makes it defined is the
-/// ctor refusing an owner that is not the arude::signal_owner it casts to.
+/// What is stored is an arude::non_owning_t<arude::signal_owner_base>, rather
+/// than the owner's type or a pointer to its bundle, because neither is
+/// available where the member is declared: TSelf is incomplete while its own
+/// base is being instantiated, so TSelf::sigs_t cannot be looked up yet. The
+/// erased pointer needs nothing, and the lookup waits until sigs() is called, by
+/// which point TSelf is complete. The cast back on the way out is a downcast,
+/// and what makes it defined is the ctor refusing an owner that is not the
+/// arude::signal_owner it casts to.
 ///
 /// \tparam TSelf The relaying class, which must declare the owner's bundle type
 ///         as a nested sigs_t reachable from here. Declaring it in a public
@@ -342,7 +345,19 @@ public: // Methods
 private: // Variables
   // Never null: the ctor above is the only one there is, and it takes a
   // reference. The initialiser is what keeps that true of any ctor added later.
-  signal_owner_base* owner_ = nullptr;
+  //
+  // A pointer and not a signal_owner_base&, which would carry that invariant in
+  // the type and cost the assignment operators to do it: a reference member
+  // deletes both of them implicitly. This is a base rather than a member, so the
+  // loss would not stop here — every relaying class would come out unassignable
+  // for a reason nothing in its own definition mentions, and a relay is meant to
+  // be as cheap to pass about as the pointer it wraps. A reference could not be
+  // rebound either, which forecloses handing a relay a second owner.
+  //
+  // arude::non_owning_t is exactly that pointer and says what the comment above
+  // says in the declaration: the owner is observed, and a relay going out of
+  // scope takes nothing with it.
+  non_owning_t<signal_owner_base> owner_ = nullptr;
 };
 
 ///

@@ -18,6 +18,7 @@
 #include "arude/exception.hpp"
 #include "arude/exception_report.hpp"
 #include "arude/hello_world.hpp"
+#include "arude/non_owning_t.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"
 #include "arude/signal_owner.hpp"
