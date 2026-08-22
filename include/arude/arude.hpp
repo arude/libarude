@@ -20,6 +20,7 @@
 #include "arude/hello_world.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"
+#include "arude/signal_owner.hpp"
 #include "arude/type_name.hpp"
 
 ///

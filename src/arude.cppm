@@ -29,6 +29,7 @@ module;
 #include "arude/hello_world.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"
+#include "arude/signal_owner.hpp"
 #include "arude/type_name.hpp"
 
 export module arude;
@@ -90,6 +91,9 @@ using ::arude::exception_user_data_c;
 using ::arude::hello_world;
 using ::arude::noncopyable;
 using ::arude::pimpl_owner;
+using ::arude::signal_owner;
+using ::arude::signal_owner_base;
+using ::arude::signal_relay;
 using ::arude::stacktrace_available;
 using ::arude::type_name;
 
