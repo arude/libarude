@@ -93,6 +93,59 @@ auto boxed::value() const -> int
   return impl().value();
 }
 
+///
+/// The bundle a module consumer announces through, declared here so that the
+/// type the exported storage is instantiated with is one the module has never
+/// seen.
+///
+struct bell_sigs final
+{
+  int rung = 0;
+};
+
+///
+/// Derived from the exported signal_owner, which is the only way to find out
+/// whether the class template the alias names came across.
+///
+class bell final : public arude::signal_owner<bell_sigs>
+{};
+
+///
+/// Derived from the exported signal_relay, which reaches the owner through
+/// arude::signal_owner_base: three exported names, and the pair only works if
+/// all of them arrived.
+///
+class bell_ringer final : public arude::signal_relay<bell_ringer>
+{
+public: // Typedefs
+  using sigs_t = bell_sigs;
+
+  ///
+  /// Ctor.
+  /// \param owner The bell to announce through.
+  ///
+  explicit bell_ringer(bell& owner);
+
+  ///
+  /// Announces through the bell's bundle.
+  ///
+  auto ring() -> void;
+};
+
+///
+///
+bell_ringer::bell_ringer(bell& owner)
+  : signal_relay{owner}
+{
+}
+
+///
+///
+auto bell_ringer::ring() -> void
+{
+  ++sigs().rung;
+}
+
 } // namespace module_test
 
 SCENARIO("the module exports the public interface", "[module]")
@@ -142,6 +195,26 @@ SCENARIO("the module exports the public interface", "[module]")
       REQUIRE(boxed.value() == 7);
       STATIC_REQUIRE(!std::is_copy_constructible_v<module_test::boxed>);
       STATIC_REQUIRE(std::is_move_constructible_v<module_test::boxed>);
+    }
+  }
+
+  // The same question again for the signal classes, which are three exported
+  // names rather than one: the relay finds the owner through the erased base,
+  // so binding one to the other exercises all three at once.
+  GIVEN("an owner and a relay built from the exported names")
+  {
+    auto bell = module_test::bell{};
+    auto ringer = module_test::bell_ringer{bell};
+
+    WHEN("the relay announces")
+    {
+      ringer.ring();
+
+      THEN("it reached the owner's bundle")
+      {
+        REQUIRE(bell.sigs().rung == 1);
+        STATIC_REQUIRE(std::is_base_of_v<arude::signal_owner_base, module_test::bell>);
+      }
     }
   }
 }
