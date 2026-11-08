@@ -159,18 +159,19 @@ private: // Helpers
   /// Registers one section with the type index, keeping every registration
   /// so an ambiguity error can name the locations.
   ///
-  /// \param key The type key, from type_key<T>().
+  /// \param key The type key, from arude::type_key<T>().
   /// \param section The section to register. Kept.
   /// \param document The document it belongs to. Kept.
   ///
   auto index_type(
-    const void* key, std::shared_ptr<detail::section_base> section, std::shared_ptr<detail::document_base> document)
-    -> void;
+    const type_key_t& key,
+    std::shared_ptr<detail::section_base> section,
+    std::shared_ptr<detail::document_base> document) -> void;
 
 private: // Variables
   mutable std::shared_mutex mutex_;
   std::unordered_map<std::string, std::shared_ptr<detail::document_base>> documents_;
-  std::unordered_map<const void*, detail::type_entry> types_; // Keyed by type_key<T>().
+  std::unordered_map<type_key_t, detail::type_entry> types_; // Keyed by type_key<T>().
 };
 
 ///
@@ -193,8 +194,10 @@ auto config_manager::register_document(E format, Tr carrier) -> config_document_
   auto document = std::make_shared<detail::document<E, Tr>>(
     std::move(format),
     std::move(carrier),
-    [this](const void* key, std::shared_ptr<detail::section_base> section, std::shared_ptr<detail::document_base> doc)
-      -> void { index_type(key, std::move(section), std::move(doc)); });
+    [this](
+      const type_key_t& key,
+      std::shared_ptr<detail::section_base> section,
+      std::shared_ptr<detail::document_base> doc) -> void { index_type(key, std::move(section), std::move(doc)); });
 
   {
     const auto lock = std::scoped_lock{mutex_};
@@ -305,7 +308,7 @@ inline auto config_manager::load_all(const load_policy policy) -> void
 ///
 ///
 inline auto config_manager::index_type(
-  const void* key, std::shared_ptr<detail::section_base> section, std::shared_ptr<detail::document_base> document)
+  const type_key_t& key, std::shared_ptr<detail::section_base> section, std::shared_ptr<detail::document_base> document)
   -> void
 {
   const auto lock = std::scoped_lock{mutex_};

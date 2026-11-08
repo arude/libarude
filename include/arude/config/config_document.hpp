@@ -244,12 +244,12 @@ public:
   ///
   /// Registers a section with the manager's type index.
   ///
-  /// \param key The type key, from type_key<T>().
+  /// \param key The type key, from arude::type_key<T>().
   /// \param section The section to register. Kept.
   /// \param document The document it belongs to. Kept.
   ///
   virtual auto register_type(
-    const void* key, std::shared_ptr<section_base> section, std::shared_ptr<document_base> document) -> void = 0;
+    const type_key_t& key, std::shared_ptr<section_base> section, std::shared_ptr<document_base> document) -> void = 0;
 };
 
 ///
@@ -276,7 +276,7 @@ public: // Structors
   document(
     E format,
     Tr carrier,
-    std::function<void(const void*, std::shared_ptr<section_base>, std::shared_ptr<document_base>)> registrar);
+    std::function<void(const type_key_t&, std::shared_ptr<section_base>, std::shared_ptr<document_base>)> registrar);
 
 public: // Overrides
   ///
@@ -312,7 +312,8 @@ public: // Overrides
   ///
   /// \see document_base::register_type
   ///
-  auto register_type(const void* key, std::shared_ptr<section_base> section, std::shared_ptr<document_base> document)
+  auto
+  register_type(const type_key_t& key, std::shared_ptr<section_base> section, std::shared_ptr<document_base> document)
     -> void override;
 
 private: // Helpers
@@ -331,7 +332,7 @@ private: // Variables
   Tr carrier_;
   rfl::Generic::Object parsed_;
   std::vector<std::shared_ptr<section_base>> sections_;
-  std::function<void(const void*, std::shared_ptr<section_base>, std::shared_ptr<document_base>)> registrar_;
+  std::function<void(const type_key_t&, std::shared_ptr<section_base>, std::shared_ptr<document_base>)> registrar_;
   mutable std::shared_mutex mutex_;
 };
 
@@ -522,7 +523,7 @@ template<endpoint_c E, transport_c Tr>
 document<E, Tr>::document(
   E format,
   Tr carrier,
-  std::function<void(const void*, std::shared_ptr<section_base>, std::shared_ptr<document_base>)> registrar)
+  std::function<void(const type_key_t&, std::shared_ptr<section_base>, std::shared_ptr<document_base>)> registrar)
   : format_{std::move(format)}
   , carrier_{std::move(carrier)}
   , registrar_{std::move(registrar)}
@@ -682,7 +683,7 @@ auto document<E, Tr>::attach(std::shared_ptr<section_base> section) -> void
 ///
 template<endpoint_c E, transport_c Tr>
 auto document<E, Tr>::register_type(
-  const void* key, std::shared_ptr<section_base> section, std::shared_ptr<document_base> document) -> void
+  const type_key_t& key, std::shared_ptr<section_base> section, std::shared_ptr<document_base> document) -> void
 {
   registrar_(key, std::move(section), std::move(document));
 }

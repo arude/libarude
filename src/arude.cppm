@@ -139,6 +139,7 @@ using ::arude::signal_owner_base;
 using ::arude::signal_relay;
 using ::arude::stacktrace_available;
 using ::arude::type_key;
+using ::arude::type_key_t;
 using ::arude::type_name;
 
 } // namespace arude
