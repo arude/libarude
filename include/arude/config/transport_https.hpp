@@ -262,8 +262,9 @@ inline auto transport_https::exists() const -> bool
   }
 
   // A 404 is an answer; a 403 or a 500 is not, and reporting either as "there
-  // is nothing there" would have load_policy::create overwrite a configuration
-  // that is present but momentarily unreadable.
+  // is nothing there" would have load_policy::create hand back defaults for a
+  // configuration that is present but momentarily unreadable — and a later
+  // store() would then overwrite it with them.
   if(result->status == 404 || result->status == 410)
   {
     return false;

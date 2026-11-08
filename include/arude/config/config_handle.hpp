@@ -85,6 +85,7 @@ public: // Accessors
   /// a data race the caller cannot see.
   ///
   /// \return The cached value.
+  /// \throws exception_t With not_found if the section has never been loaded or set.
   ///
   [[nodiscard]] auto get() const -> T;
 

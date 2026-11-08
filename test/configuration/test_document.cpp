@@ -14,9 +14,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace document_test
 {
@@ -366,6 +368,123 @@ SCENARIO("per-section versions migrate independently", "[config][document]")
         {
           REQUIRE(ex.data() == arude::config::config_error::invalid_version);
         }
+      }
+    }
+  }
+}
+
+// Regressions for three defects found by review, each of which a passing suite
+// had missed because no test exercised the paths where two rules meet.
+
+SCENARIO("the create policy leaves the source alone", "[config][document]")
+{
+  GIVEN("a document over a path with no file at it")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_create.toml"};
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+
+    WHEN("it is loaded with the create policy")
+    {
+      document.load(arude::config::load_policy::create);
+
+      // The defect: load() used to call store(), which skips disengaged
+      // sections, so it wrote an empty file. The next start-up then found that
+      // file present, failed to parse it, and kept failing until somebody
+      // deleted it by hand.
+      THEN("nothing was written")
+      {
+        REQUIRE(!std::filesystem::exists(file.path()));
+      }
+
+      THEN("the section is readable, at its defaults")
+      {
+        REQUIRE(root.loaded());
+        REQUIRE(root.get().version == arude::config::version_of<document_test::app>());
+      }
+
+      AND_WHEN("it is stored and loaded again by a second manager")
+      {
+        document.store();
+
+        auto next_manager = arude::config::config_manager{};
+        auto next_document =
+          next_manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+        auto next_root = next_document.add_root<document_test::app>();
+
+        THEN("the second start-up reads what the first wrote")
+        {
+          next_document.load(arude::config::load_policy::create);
+          REQUIRE(next_root.loaded());
+          REQUIRE(next_root.get().version == arude::config::version_of<document_test::app>());
+        }
+      }
+    }
+  }
+}
+
+SCENARIO("reading a section that was never loaded is a not_found", "[config][document]")
+{
+  GIVEN("a registered section and no load")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_unloaded.toml"};
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+
+    THEN("get() throws the subsystem's own error, not std::bad_optional_access")
+    {
+      REQUIRE(!root.loaded());
+
+      try
+      {
+        std::ignore = root.get();
+        FAIL("get() on a never-loaded section should have thrown");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        REQUIRE(ex.data() == arude::config::config_error::not_found);
+      }
+    }
+
+    // std::bad_optional_access derives from std::exception, not from
+    // arude::exception_base, so it used to walk straight past the catch every
+    // other failure here is caught by.
+    THEN("it is catchable as an arude::exception_base")
+    {
+      REQUIRE_THROWS_AS(std::ignore = root.get(), arude::exception_base);
+    }
+  }
+}
+
+SCENARIO("committing twice does not undo the first commit", "[config][document]")
+{
+  GIVEN("a document loaded once")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_recommit.toml"};
+    test_helpers::write_text(file.path(), "version = 1\nname = \"kept\"\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+
+    document.load();
+
+    WHEN("it is loaded again, as two concurrent loads interleave")
+    {
+      document.load();
+
+      // The defect: commit() assigned the disengaged pending optional the
+      // previous commit had left behind, so a load that succeeded reported
+      // loaded() == false and store() then omitted the section entirely.
+      THEN("the value survives")
+      {
+        REQUIRE(root.loaded());
+        REQUIRE(root.get().name == "kept");
       }
     }
   }

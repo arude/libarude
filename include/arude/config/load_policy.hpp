@@ -31,7 +31,10 @@ enum class load_policy : std::uint8_t
   none = 0x00,
 
   ///
-  /// A missing source is written out from the defaults rather than being an error.
+  /// A missing source leaves every section at its defaults rather than being
+  /// an error. Nothing is written: load() never touches the medium, so the
+  /// source appears only when the application calls store(), and a read-only
+  /// transport can be loaded this way rather than refusing.
   ///
   create = 0x01,
 

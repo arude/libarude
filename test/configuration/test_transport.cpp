@@ -239,24 +239,35 @@ SCENARIO("a read-only transport refuses to be written", "[config][transport]")
       }
     }
 
-    THEN("the create policy cannot write one either")
+    // load() never writes, so create over a read-only transport is not a
+    // contradiction: the defaults reach the cache and the medium is untouched.
+    // It is store() that refuses, which is where the write actually is.
+    THEN("the create policy fills the cache without touching the transport")
     {
       auto absent_manager = arude::config::config_manager{};
       auto absent_document = absent_manager.register_document(
         arude::config::endpoint_toml{}, transport_test::transport_memory{"absent", store, false});
-      std::ignore = absent_document.add_root<test_helpers::config_test_t>();
+      auto absent_root = absent_document.add_root<test_helpers::config_test_t>();
 
       constexpr auto policy = arude::config::load_policy::create;
 
+      absent_document.load(policy);
+
+      REQUIRE(absent_root.loaded());
+      REQUIRE(absent_root.get().version == arude::config::version_of<test_helpers::config_test_t>());
+      REQUIRE(!store.contains("absent"));
+
       try
       {
-        absent_document.load(policy);
-        FAIL("creating through a read-only transport should have thrown");
+        absent_document.store();
+        FAIL("storing through a read-only transport should have thrown");
       }
       catch(const arude::config::exception_t& ex)
       {
         REQUIRE(ex.data() == arude::config::config_error::read_only);
       }
+
+      REQUIRE(!store.contains("absent"));
     }
   }
 }

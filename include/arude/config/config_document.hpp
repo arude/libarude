@@ -24,6 +24,13 @@
 ///     defaults. A section added after a load cannot clobber a value already
 ///     in the file, which is what makes adding one after a load allowed.
 ///
+/// load() never writes, on any policy. load_policy::create is a decision about
+/// the cache alone: a source that is not there leaves every section at its
+/// defaults, and the source appears when the application calls store(). That
+/// keeps the two rules above from contradicting each other — a store() from
+/// inside load(), before any section was engaged, would emit a document with
+/// every section skipped.
+///
 /// Locking: one shared_mutex per document, not per section — sections cannot
 /// be locked independently when a write serializes them all together. The I/O
 /// and the parsing happen outside that lock, and the lock is taken
@@ -93,8 +100,9 @@ struct type_entry
 };
 
 ///
-/// One typed section of a document, behind the erased section_base below.
-/// \see section_base
+/// A section of a document with its type erased.
+/// What a document holds and iterates over; section<T> below is the typed
+/// implementation, and config_handle<T> is what a caller sees.
 ///
 class section_base
 {
@@ -138,9 +146,20 @@ public:
 
   ///
   /// Swaps the value read by read_from() into the cached value.
-  /// Called by the document under its lock.
+  /// Called by the document under its lock. A no-op where nothing is pending,
+  /// so a second commit cannot undo the first.
   ///
   virtual auto commit() -> void = 0;
+
+  ///
+  /// Engages the section with a default-constructed value.
+  /// What load_policy::create does to a source that is not there: the section
+  /// becomes readable through get(), and nothing reaches the transport until
+  /// store() is called.
+  ///
+  /// Called by the document under its lock.
+  ///
+  virtual auto reset_to_default() -> void = 0;
 
   ///
   /// Writes the section's value into a document.
@@ -166,14 +185,14 @@ class document_base
 {
 public:
   ///
-  /// Destroys the document. Virtual, because the manager owns documents
-  /// through pointers to this class and deletes them through it.
-  ///
-  ///
   /// Constructs the base. The class is abstract, so only a concrete document can.
   ///
   document_base() = default;
 
+  ///
+  /// Destroys the document. Virtual, because the manager owns documents
+  /// through pointers to this class and deletes them through it.
+  ///
   virtual ~document_base() = default;
 
   // A document is one source, not a value to duplicate: copying one would
@@ -356,6 +375,11 @@ public: // Overrides
   auto commit() -> void override;
 
   ///
+  /// \see section_base::reset_to_default
+  ///
+  auto reset_to_default() -> void override;
+
+  ///
   /// \see section_base::write_into
   ///
   auto write_into(rfl::Generic::Object& document) const -> void override;
@@ -371,6 +395,7 @@ public: // Accessors
   /// Returns the cached value. The caller holds the document's lock.
   ///
   /// \return The cached value.
+  /// \throws exception_t With not_found if the section has never been loaded or set.
   ///
   [[nodiscard]] auto value() const -> const T&;
 
@@ -421,8 +446,26 @@ auto section<T>::commit() -> void
 {
   const auto lock = std::scoped_lock{pending_mutex_};
 
+  // Guarded, not unconditional: two concurrent load()s both read_from and then
+  // both commit, and without this the second assigns the disengaged optional
+  // the first left behind — wiping a value that had just been loaded, so a
+  // successful load reported loaded() == false and store() silently omitted
+  // the section.
+  if(!pending_.has_value())
+  {
+    return;
+  }
+
   value_ = std::move(pending_);
   pending_.reset();
+}
+
+///
+///
+template<configuration_c T>
+auto section<T>::reset_to_default() -> void
+{
+  value_ = T{};
 }
 
 ///
@@ -451,9 +494,17 @@ auto section<T>::engaged() const -> bool
 template<configuration_c T>
 auto section<T>::value() const -> const T&
 {
-  // The caller holds the document's lock and has checked engaged() or loaded()
-  // first, so the optional is engaged here.
-  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+  // Checked here rather than left to the caller. std::optional::value() throws
+  // std::bad_optional_access, which derives from std::exception and not from
+  // arude::exception_base, so it walks straight past the catch every other
+  // failure in this subsystem is caught by.
+  if(!value_.has_value())
+  {
+    const auto where = name_.empty() ? std::string{"the root section"} : std::format("section '{}'", name_);
+
+    throw exception_t{std::format("arude::config: {} has not been loaded or set.", where), config_error::not_found};
+  }
+
   return value_.value();
 }
 
@@ -512,11 +563,19 @@ auto document<E, Tr>::load(const load_policy policy) -> void
         std::format("arude::config: there is no configuration at '{}'.", carrier_.location()), config_error::not_found};
     }
 
-    // Written out rather than only returned, so that the file the user is
-    // meant to edit is there after the first run. On a read-only transport
-    // that is a read_only failure, which is the honest answer: there is
-    // nothing there and nothing this manager can do about it.
-    store();
+    // Nothing is written here. create is a decision about the cache and not
+    // about the medium: every section takes its defaults, and the transport is
+    // untouched until somebody calls store(). Writing from load() would need a
+    // writable transport to read a missing one, and it is store() that the
+    // never-write-a-disengaged-section rule is written for — a store() from
+    // here, before any section is engaged, emitted an empty document and left
+    // the source unparseable on the next run.
+    const auto lock = std::scoped_lock{mutex_};
+
+    for(const auto& section : sections_)
+    {
+      section->reset_to_default();
+    }
 
     return;
   }
