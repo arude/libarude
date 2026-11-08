@@ -9,7 +9,6 @@
 
 #include "arude/config.hpp"
 #include "arude/non_owning_t.hpp"
-#include "test/helpers/as_text.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -73,6 +72,7 @@ auto transport_memory::location() const -> std::string
 
 ///
 ///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
 auto transport_memory::writable() const -> bool
 {
   return true;
@@ -181,7 +181,7 @@ private: // Variables
 ///
 ///
 marker_endpoint::marker_endpoint(marker_options options)
-  : options_{std::move(options)}
+  : options_{options}
 {
 }
 
@@ -190,9 +190,7 @@ marker_endpoint::marker_endpoint(marker_options options)
 template<arude::config::transport_c Tr>
 auto marker_endpoint::parse(const Tr& carrier) const -> document_t
 {
-  const auto bytes = carrier.read();
-  const auto* const begin = reinterpret_cast<const char*>(bytes.data());
-  const auto text = std::string{begin, bytes.size()};
+  const auto text = arude::config::as_text(carrier.read());
 
   auto result = rfl::toml::read<rfl::Generic>(text);
 
@@ -225,10 +223,7 @@ auto marker_endpoint::read_section(
 template<arude::config::transport_c Tr>
 auto marker_endpoint::emit(const Tr& carrier, const document_t& document) const -> void
 {
-  const auto text = rfl::toml::write(document);
-  const auto* const begin = reinterpret_cast<const std::byte*>(text.data());
-
-  carrier.write(std::span<const std::byte>{begin, text.size()});
+  carrier.write(arude::config::as_bytes(rfl::toml::write(document)));
 }
 
 ///
@@ -249,11 +244,7 @@ SCENARIO("a stateful endpoint's options reach the read", "[config][endpoint]")
   {
     auto store = endpoint_test::transport_memory::store_t{};
     const auto seed = std::string_view{"version = 1\nname = \"seeded\"\n"};
-    const auto seed_bytes = [&]()
-    {
-      const auto* const begin = reinterpret_cast<const std::byte*>(seed.data());
-      return std::vector<std::byte>{begin, begin + seed.size()};
-    }();
+    const auto seed_bytes = [&seed]() -> std::vector<std::byte> { return arude::config::as_bytes(seed); }();
     store["plain"] = seed_bytes;
     store["stamped"] = seed_bytes;
 
@@ -280,8 +271,8 @@ SCENARIO("a stateful endpoint's options reach the read", "[config][endpoint]")
 
       THEN("only the instance whose option says so parsed the marker")
       {
-        REQUIRE(!test_helpers::as_text(store.at("plain")).contains("stamped"));
-        REQUIRE(test_helpers::as_text(store.at("stamped")).contains("stamped"));
+        REQUIRE(!arude::config::as_text(store.at("plain")).contains("stamped"));
+        REQUIRE(arude::config::as_text(store.at("stamped")).contains("stamped"));
       }
     }
   }

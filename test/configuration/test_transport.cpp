@@ -9,7 +9,6 @@
 
 #include "arude/config.hpp"
 #include "arude/non_owning_t.hpp"
-#include "test/helpers/as_text.hpp"
 #include "test/helpers/config_test_v2.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -163,7 +162,7 @@ SCENARIO("a document round-trips through a transport of an application's own", "
       THEN("the bytes went to the store rather than to a file")
       {
         REQUIRE(store.contains("device"));
-        REQUIRE(test_helpers::as_text(store.at("device")).contains("device"));
+        REQUIRE(arude::config::as_text(store.at("device")).contains("device"));
       }
 
       THEN("it reads back through the same transport")

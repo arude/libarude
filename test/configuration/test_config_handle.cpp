@@ -148,7 +148,7 @@ auto scoped_release::fire() -> void
   fired_ = true;
 
   {
-    const auto lock = std::lock_guard{gate_->mutex};
+    const auto lock = std::scoped_lock{gate_->mutex};
     gate_->released = true;
   }
 
@@ -174,6 +174,7 @@ auto slow_transport::location() const -> std::string
 
 ///
 ///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
 auto slow_transport::writable() const -> bool
 {
   return true;
@@ -191,7 +192,7 @@ auto slow_transport::exists() const -> bool
 auto slow_transport::read() const -> std::vector<std::byte>
 {
   auto lock = std::unique_lock{gate_->mutex};
-  gate_->ready.wait(lock, [this] { return gate_->released; });
+  gate_->ready.wait(lock, [this] -> bool { return gate_->released; });
 
   return store_->at(slot_);
 }
@@ -213,22 +214,20 @@ struct app
   std::string name = "example";
 };
 
+namespace
+{
+
 ///
 /// Seeds a slot with a minimal document, as bytes.
 /// \param name The name the document will load as.
 /// \return The bytes.
 ///
-[[nodiscard]] auto seed(std::string_view name) -> std::vector<std::byte>;
-
-///
-///
-auto seed(const std::string_view name) -> std::vector<std::byte>
+[[nodiscard]] auto seed(const std::string_view name) -> std::vector<std::byte>
 {
-  const auto text = std::format("version = 1\nname = \"{}\"\n", name);
-  const auto* const begin = reinterpret_cast<const std::byte*>(text.data());
-
-  return {begin, begin + text.size()};
+  return arude::config::as_bytes(std::format("version = 1\nname = \"{}\"\n", name));
 }
+
+} // namespace
 
 } // namespace config_handle_test
 
@@ -254,7 +253,7 @@ SCENARIO("a slow load on one document does not block a get on another", "[config
     auto fast_root = fast_document.add_root<config_handle_test::app>();
     fast_root.set(config_handle_test::app{.name = "fast"});
 
-    auto loading = std::thread{[&slow_document] { slow_document.load(); }};
+    auto loading = std::thread{[&slow_document] -> void { slow_document.load(); }};
 
     WHEN("get() is called on the other document while the slow load is blocked")
     {
@@ -295,7 +294,7 @@ SCENARIO("a get on a document is serialized against a load of its own", "[config
     auto root = document.add_root<config_handle_test::app>();
     root.set(config_handle_test::app{.name = "before"});
 
-    auto loading = std::thread{[&document] { document.load(); }};
+    auto loading = std::thread{[&document] -> void { document.load(); }};
 
     WHEN("get() is called while the load has not finished parsing")
     {

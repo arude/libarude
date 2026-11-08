@@ -44,6 +44,9 @@ struct launch_event
   rfl::Field<"when", rfl::Timestamp<"%Y-%m-%d">> when;
 };
 
+namespace
+{
+
 ///
 /// Reads the string stored under \p key in \p object.
 ///
@@ -79,6 +82,8 @@ auto table_at(const rfl::Generic::Object& object, const std::string& key) -> rfl
 {
   return object.get(key).value().to_object().value();
 }
+
+} // namespace
 
 } // namespace generic_toml_test
 
@@ -195,6 +200,9 @@ SCENARIO("an unset optional field survives the trip into rfl::Generic and out th
       {
         REQUIRE(round_tripped.has_value());
         REQUIRE(round_tripped->note().has_value());
+        // The REQUIRE above is what pins the engagement; the analyser cannot
+        // see through the assertion macro.
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
         REQUIRE(round_tripped->note()->empty());
       }
     }

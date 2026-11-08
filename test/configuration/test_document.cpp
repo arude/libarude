@@ -22,6 +22,8 @@
 
 namespace document_test
 {
+namespace
+{
 
 ///
 /// The root configuration of these tests. One version only: what matters is
@@ -152,15 +154,13 @@ constexpr auto downgrade(const network_v2& val) -> network_v1
 /// \param path File to read.
 /// \return The text.
 ///
-auto text_of(const std::filesystem::path& path) -> std::string;
-
-///
-///
 auto text_of(const std::filesystem::path& path) -> std::string
 {
   auto stream = std::ifstream{path};
   return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
 }
+
+} // namespace
 
 } // namespace document_test
 
