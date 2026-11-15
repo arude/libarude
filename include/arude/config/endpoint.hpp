@@ -31,8 +31,10 @@
 #include <rfl/NoExtraFields.hpp>
 #include <rfl/to_generic.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <format>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -131,6 +133,21 @@ template<configuration_c T>
 [[nodiscard]] auto read_generic(const rfl::Generic& generic, bool reject_unknown_fields) -> T;
 
 ///
+/// Reports whether a section is in a document.
+/// A named section is there when its key is. The root section has no key of
+/// its own, so it is there when the top level holds at least one value that is
+/// neither a table nor a non-empty array of tables: a root that was ever
+/// written has its scalar version key, and a top level made of tables and
+/// arrays of tables alone holds only what belongs to other owners.
+///
+/// \param document The document to look in. For the root section, with every
+///                  registered subsection already stripped by the caller.
+/// \param section The section name, or empty for the root.
+/// \return true if the section is there, whatever shape it is in.
+///
+[[nodiscard]] auto section_present(const rfl::Generic::Object& document, std::string_view section) -> bool;
+
+///
 /// Writes a configuration into a document as a section.
 /// The version written is the one the type declares, whatever the value's
 /// version member happens to hold. An empty name is the root: the document's
@@ -158,15 +175,19 @@ auto write_section_value(rfl::Generic::Object& document, std::string_view sectio
 [[nodiscard]] auto acquire_subtree(const rfl::Generic::Object& document, std::string_view section) -> rfl::Generic;
 
 ///
-/// The version decision for one section, moved from config_manager::parse.
+/// The version decision for one section.
 /// Probes the version in the section's own subtree, returns the exact match,
 /// rejects on strict_version or an absent upgrade_to_current, and migrates
 /// otherwise.
 ///
+/// A named section that is not in the document is an invalid_payload here, as
+/// it declares no version. A caller that tells an absent section from a
+/// malformed one asks section_present() first.
+///
 /// \tparam T Configuration type.
 /// \param document The document to read from.
 /// \param section The section name, or empty for the root.
-/// \param policy What to do about a missing or differently versioned section.
+/// \param policy What to do about a differently versioned section.
 /// \param reject_unknown_fields Whether a field the type does not declare is an error.
 /// \return The configuration, migrated where the policy allows it.
 /// \throws exception_t With invalid_payload or invalid_version.
@@ -261,6 +282,30 @@ auto read_generic(const rfl::Generic& generic, const bool reject_unknown_fields)
   }
 
   return std::move(result).value();
+}
+
+///
+///
+inline auto section_present(const rfl::Generic::Object& document, const std::string_view section) -> bool
+{
+  if(!section.empty())
+  {
+    return document.get(std::string{section}).has_value();
+  }
+
+  const auto is_table = [](const rfl::Generic& value) -> bool { return value.to_object().has_value(); };
+
+  // An empty array is a value of the root's like any scalar: nothing marks it
+  // as somebody else's tables.
+  const auto is_tables = [&is_table](const rfl::Generic& value) -> bool
+  {
+    const auto array = value.to_array();
+    return array.has_value() && !array.value().empty() && std::ranges::all_of(array.value(), is_table);
+  };
+
+  return !std::ranges::all_of(
+    document | std::views::values,
+    [&is_table, &is_tables](const rfl::Generic& value) -> bool { return is_table(value) || is_tables(value); });
 }
 
 ///

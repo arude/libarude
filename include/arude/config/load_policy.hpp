@@ -6,7 +6,8 @@
 /// libarude is dual licensed. See LICENSE for the AGPLv3 terms, and
 /// LICENSING.md for the alternative MIT license available by arrangement.
 ///
-/// What load() should do about a source that is missing or of another version.
+/// What load() should do about a source or a section that is missing, or of
+/// another version.
 ///
 #pragma once
 
@@ -18,7 +19,8 @@ namespace arude::config
 {
 
 ///
-/// What load() should do about a source that is missing or of another version.
+/// What load() should do about a source or a section that is missing, or of
+/// another version.
 /// A bitmask, so the flags combine through the magic_enum bitwise operators
 /// that arude/enum.hpp re-exports as arude::bitwise_operators; is_set() is
 /// what reads one back out.
@@ -26,15 +28,22 @@ namespace arude::config
 enum class load_policy : std::uint8_t
 {
   ///
-  /// A source must be there, and must be the version asked for.
+  /// The source must be there, every registered section must be in it, and
+  /// each must be the version asked for.
   ///
   none = 0x00,
 
   ///
-  /// A missing source leaves every section at its defaults rather than being
-  /// an error. Nothing is written: load() never touches the medium, so the
-  /// source appears only when the application calls store(), and a read-only
-  /// transport can be loaded this way rather than refusing.
+  /// What is missing takes its defaults rather than being an error. That
+  /// covers a source that is not there, which leaves every section at its
+  /// defaults, and equally a section that is not in a source that is there,
+  /// which leaves that one section at its defaults and every other as read —
+  /// so a release that adds a section still loads a file written before it.
+  /// Without this flag either is a not_found.
+  ///
+  /// Nothing is written: load() never touches the medium, so what was created
+  /// reaches the source only when the application calls store(), and a
+  /// read-only transport can be loaded this way rather than refusing.
   ///
   create = 0x01,
 

@@ -98,7 +98,8 @@ public: // Accessors
 
   ///
   /// Reports whether a value is cached — the section was loaded or set at
-  /// least once.
+  /// least once. A load under load_policy::create that found the section
+  /// missing counts: it leaves the section's defaults cached.
   ///
   /// \return true if get() would find a value.
   ///
@@ -118,7 +119,14 @@ public: // Methods
   /// nothing: where it throws, this section and every other on the document
   /// hold what they held before.
   ///
-  /// \param policy What to do about a missing or differently versioned document.
+  /// \param policy What to do about a source or a section that is missing, or
+  ///               of another version.
+  /// \throws exception_t With not_found if the source, or any section
+  ///                     registered on the document, is not there and the
+  ///                     policy does not carry load_policy::create; with
+  ///                     invalid_payload or invalid_version if a section
+  ///                     cannot be read; with the transport's own error, or
+  ///                     io_error, if the source cannot be.
   ///
   auto load(load_policy policy = load_policy::upgrade_to_current) -> void;
 

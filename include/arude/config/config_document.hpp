@@ -25,11 +25,11 @@
 ///     in the file, which is what makes adding one after a load allowed.
 ///
 /// load() never writes, on any policy. load_policy::create is a decision about
-/// the cache alone: a source that is not there leaves every section at its
-/// defaults, and the source appears when the application calls store(). That
-/// keeps the two rules above from contradicting each other — a store() from
-/// inside load(), before any section was engaged, would emit a document with
-/// every section skipped.
+/// the cache alone: a source that is not there, or a section that is not in
+/// it, leaves the section at its defaults, and it reaches the source when the
+/// application calls store(). That keeps the two rules above from
+/// contradicting each other — a store() from inside load(), before any section
+/// was engaged, would emit a document with every section skipped.
 ///
 /// load() is all or nothing. Every section is read before any is changed, so
 /// a load that fails — for one section or for the whole source — leaves every
@@ -124,26 +124,24 @@ public:
   /// a get(), and two loads under way at once each hold steps of their own
   /// rather than sharing a place to put a half-finished result.
   ///
+  /// A section that is not in the document takes its type's defaults where
+  /// the policy carries load_policy::create. That is also what a source that
+  /// is not there comes to: it is handed in as an empty document, which no
+  /// section is in.
+  ///
   /// \param document The parsed document. For the root section the document
   ///                  has every registered subsection already stripped.
-  /// \param policy What to do about a differently versioned section.
+  /// \param policy What to do about a missing or differently versioned section.
   /// \return The step that installs the value read. The document calls it
   ///         under its exclusive lock, at most once, and keeps the section
   ///         alive until it has.
-  /// \throws exception_t With invalid_payload or invalid_version.
+  /// \throws exception_t With not_found if the section is not in the document
+  ///                     and the policy does not create it, and with
+  ///                     invalid_payload or invalid_version if it is there
+  ///                     and cannot be read.
   ///
   [[nodiscard]] virtual auto prepare_load(const rfl::Generic::Object& document, load_policy policy)
     -> std::function<void()> = 0;
-
-  ///
-  /// Engages the section with a default-constructed value.
-  /// What load_policy::create does to a source that is not there: the section
-  /// becomes readable through get(), and nothing reaches the transport until
-  /// store() is called.
-  ///
-  /// Called by the document under its lock.
-  ///
-  virtual auto reset_to_default() -> void = 0;
 
   ///
   /// Writes the section's value into a document.
@@ -193,7 +191,13 @@ public:
   /// has finished first, this one returns having installed nothing, as the
   /// later read is the one that stands.
   ///
-  /// \param policy What to do about a missing or differently versioned document.
+  /// \param policy What to do about a source or a section that is missing, or
+  ///               of another version.
+  /// \throws exception_t With not_found if the source, or a section of it, is
+  ///                     not there and the policy does not create it; with
+  ///                     invalid_payload or invalid_version if a section
+  ///                     cannot be read; with the transport's own error, or
+  ///                     io_error, if the source cannot be.
   ///
   virtual auto load(load_policy policy) -> void = 0;
 
@@ -346,6 +350,14 @@ private: // Variables
 };
 
 ///
+/// Returns what an error message calls a section.
+///
+/// \param name The section's name, empty for the root section.
+/// \return "the root section", or the name in quotes.
+///
+[[nodiscard]] auto section_label(std::string_view name) -> std::string;
+
+///
 /// One typed section of a document.
 /// The value is a std::optional<T>: disengaged means never loaded, never set,
 /// which is what write_into reads to leave the subtree exactly as parsed.
@@ -381,11 +393,6 @@ public: // Overrides
     -> std::function<void()> override;
 
   ///
-  /// \see section_base::reset_to_default
-  ///
-  auto reset_to_default() -> void override;
-
-  ///
   /// \see section_base::write_into
   ///
   auto write_into(rfl::Generic::Object& document) const -> void override;
@@ -419,6 +426,13 @@ private: // Variables
 
 ///
 ///
+inline auto section_label(const std::string_view name) -> std::string
+{
+  return name.empty() ? std::string{"the root section"} : std::format("section '{}'", name);
+}
+
+///
+///
 template<configuration_c T>
 section<T>::section(const std::string_view name)
   : name_{name}
@@ -438,20 +452,26 @@ auto section<T>::name() const -> std::string_view
 template<configuration_c T>
 auto section<T>::prepare_load(const rfl::Generic::Object& document, const load_policy policy) -> std::function<void()>
 {
-  auto result = detail::parse_section<T>(document, name_, policy, false);
+  // Value-initialised is what a section that is not there takes when it is
+  // created: the type's defaults.
+  auto result = T{};
+
+  if(detail::section_present(document, name_))
+  {
+    result = detail::parse_section<T>(document, name_, policy, false);
+  }
+  else if(!is_set(policy, load_policy::create))
+  {
+    throw exception_t{
+      std::format(
+        "arude::config: {} is not in the source, and the load policy does not create it.", section_label(name_)),
+      config_error::not_found};
+  }
 
   // What was read lives in the closure and nowhere else until the document
   // runs it, so a load that is abandoned leaves no trace here, and two loads
   // cannot see each other's results. Moved out on the one call there is.
   return [this, result = std::move(result)] mutable -> void { value_ = std::move(result); };
-}
-
-///
-///
-template<configuration_c T>
-auto section<T>::reset_to_default() -> void
-{
-  value_ = T{};
 }
 
 ///
@@ -486,9 +506,8 @@ auto section<T>::value() const -> const T&
   // failure in this subsystem is caught by.
   if(!value_.has_value())
   {
-    const auto where = name_.empty() ? std::string{"the root section"} : std::format("section '{}'", name_);
-
-    throw exception_t{std::format("arude::config: {} has not been loaded or set.", where), config_error::not_found};
+    throw exception_t{
+      std::format("arude::config: {} has not been loaded or set.", section_label(name_)), config_error::not_found};
   }
 
   return value_.value();
@@ -545,8 +564,6 @@ auto document<E, Tr>::load(const load_policy policy) -> void
   }
 
   auto parsed = rfl::Generic::Object{};
-  auto installs = std::vector<std::function<void()>>{};
-  installs.reserve(sections.size());
 
   if(!present)
   {
@@ -557,17 +574,12 @@ auto document<E, Tr>::load(const load_policy policy) -> void
     }
 
     // Nothing is written here. create is a decision about the cache and not
-    // about the medium: every section takes its defaults, and the transport is
-    // untouched until somebody calls store(). Writing from load() would need a
-    // writable transport to read a missing one, and it is store() that the
-    // never-write-a-disengaged-section rule is written for — a store() from
-    // here, before any section is engaged, emitted an empty document and left
-    // the source unparseable on the next run. The tree goes with the sections:
-    // there is no source, so there is nothing of it to retain.
-    for(const auto& section : sections)
-    {
-      installs.push_back([section] -> void { section->reset_to_default(); });
-    }
+    // about the medium: the transport is untouched until somebody calls
+    // store(), which is what the never-write-a-disengaged-section rule is
+    // written for, and a read-only transport can be loaded this way. A source
+    // that is not there reads as an empty tree, which no section is in, so
+    // every section takes its defaults below by the same route a single
+    // missing section does.
   }
   else
   {
@@ -587,13 +599,16 @@ auto document<E, Tr>::load(const load_policy policy) -> void
         std::format("arude::config: '{}' could not be read: {}", carrier_.location(), exception_report()),
         config_error::io_error};
     }
+  }
 
-    const auto stripped = strip_subsection(parsed, sections);
+  const auto stripped = strip_subsection(parsed, sections);
 
-    for(const auto& section : sections)
-    {
-      installs.push_back(section->prepare_load(section->name().empty() ? stripped : parsed, policy));
-    }
+  auto installs = std::vector<std::function<void()>>{};
+  installs.reserve(sections.size());
+
+  for(const auto& section : sections)
+  {
+    installs.push_back(section->prepare_load(section->name().empty() ? stripped : parsed, policy));
   }
 
   // The lock is taken once, and only to swap the finished results in: the
@@ -772,9 +787,14 @@ public: // Methods
   ///
   /// Loads the document: one read, one parse, all sections filled.
   /// All or nothing: where it throws, every section holds what it held
-  /// before.
+  /// before. A section that is not in the source is a not_found, unless the
+  /// policy carries load_policy::create, which gives it its defaults.
   ///
-  /// \param policy What to do about a missing or differently versioned document.
+  /// \param policy What to do about a source or a section that is missing, or
+  ///               of another version.
+  /// \throws exception_t With not_found, invalid_payload or invalid_version,
+  ///                     or with the transport's own error, or io_error, if
+  ///                     the source cannot be read.
   ///
   auto load(load_policy policy = load_policy::upgrade_to_current) -> void;
 
@@ -801,6 +821,10 @@ public: // Methods
   /// load is allowed: it stays disengaged, and so leaves its part of the
   /// source as it is on a store, until it is set or the next load() fills it.
   /// A load() already under way when the section is added does not fill it.
+  ///
+  /// Where the source has no such section, a load() fails with not_found
+  /// unless its policy carries load_policy::create, so an application that
+  /// gains a section loads the files it wrote before with that flag.
   ///
   /// Where the config_manager the document came from has been destroyed, the
   /// section is added all the same and the handle returned works in full; only

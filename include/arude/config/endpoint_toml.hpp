@@ -182,7 +182,9 @@ public: // Accessors
   /// \param section The section name, or empty for the root.
   /// \param policy What to do about a differently versioned section.
   /// \return The configuration, migrated where the policy allows it.
-  /// \throws exception_t With invalid_payload or invalid_version.
+  /// \throws exception_t With invalid_payload, which is also what a named
+  ///                     section that is not in the document is, or with
+  ///                     invalid_version.
   ///
   template<configuration_c T>
   [[nodiscard]] auto read_section(const document_t& document, std::string_view section, load_policy policy) const -> T;

@@ -27,6 +27,7 @@
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -249,6 +250,22 @@ auto text_of(const std::filesystem::path& path) -> std::string
 {
   auto stream = std::ifstream{path};
   return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+}
+
+///
+/// Returns the keys one table of a stored file holds, for asserting on a key
+/// by name rather than on text another key might happen to contain.
+///
+/// \param path File to read. It must hold TOML, and the table asked for.
+/// \param table Name of the table, or empty for the top level of the file.
+/// \return The keys, in a set that looks a string literal up as it is.
+///
+auto keys_in(const std::filesystem::path& path, const std::string& table) -> std::set<std::string, std::less<>>
+{
+  const auto document = rfl::toml::read<rfl::Generic>(text_of(path)).value().to_object().value();
+  const auto object = table.empty() ? document : document.get(table).value().to_object().value();
+
+  return object | std::views::keys | std::ranges::to<std::set<std::string, std::less<>>>();
 }
 
 ///
@@ -618,10 +635,11 @@ SCENARIO("the create policy leaves the source alone", "[config][document]")
   }
 }
 
-// A load that caught a file part-way through being rewritten would find it
-// empty or cut short and fail, although the file was whole both before the
-// write and after it. transport_file replaces the file in one step, so no load
-// sees it empty or half-written.
+// Under the create policy a file with no section in it loads as defaults, so
+// a load that caught a file part-way through being rewritten would replace the
+// application's values with defaults and report nothing, and the next store
+// would write them out. transport_file replaces the file in one step, so no
+// load sees it empty or half-written.
 SCENARIO("a load overlapping a store of the same file reads one whole file", "[config][document]")
 {
   GIVEN("a file stored by one document, and a second document over the same file")
@@ -788,6 +806,341 @@ SCENARIO("a second load does not disengage what the first loaded", "[config][doc
         REQUIRE(root.loaded());
         REQUIRE(root.get().name == "changed");
       }
+    }
+  }
+}
+
+// An application release that adds a section meets files written before it.
+// Whether that is an error is the caller's to say, through load_policy::create;
+// either way it is a section that is not there, and not a malformed one.
+SCENARIO("a section missing from an existing source is created or reported, as the policy says", "[config][document]")
+{
+  GIVEN("a file holding a root, a logging table and a table nobody registers, and no network table")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_missing_section.toml"};
+    test_helpers::write_text(
+      file.path(),
+      "version = 1\n"
+      "name = \"from the file\"\n"
+      "\n"
+      "[logging]\n"
+      "version = 1\n"
+      "level = \"debug\"\n"
+      "\n"
+      "[experimental]\n"
+      "flag = true\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+    auto logging = document.add_section<document_test::logging>("logging");
+
+    WHEN("a document that also registers the network section is loaded without the create policy")
+    {
+      auto network = document.add_section<document_test::network_v2>("network");
+
+      THEN("the load is a not_found that names the section")
+      {
+        try
+        {
+          document.load();
+          FAIL("loading a source that lacks a registered section should have thrown");
+        }
+        catch(const arude::config::exception_t& ex)
+        {
+          REQUIRE(ex.data() == arude::config::config_error::not_found);
+          REQUIRE(ex.str().contains("'network'"));
+          REQUIRE(!ex.str().contains("declares no configuration version"));
+        }
+      }
+
+      THEN("no section was loaded, the ones that are in the file included")
+      {
+        REQUIRE_THROWS_AS(document.load(), arude::config::exception_t);
+
+        REQUIRE(!root.loaded());
+        REQUIRE(!logging.loaded());
+        REQUIRE(!network.loaded());
+      }
+    }
+
+    WHEN("the sections in the file are loaded, and a load then fails for a section added since")
+    {
+      document.load();
+
+      test_helpers::write_text(
+        file.path(),
+        "version = 1\n"
+        "name = \"rewritten\"\n"
+        "\n"
+        "[logging]\n"
+        "version = 1\n"
+        "level = \"trace\"\n");
+
+      auto network = document.add_section<document_test::network_v2>("network");
+
+      REQUIRE_THROWS_AS(document.load(), arude::config::exception_t);
+
+      THEN("the loaded sections keep the values of the load that succeeded")
+      {
+        REQUIRE(root.get().name == "from the file");
+        REQUIRE(logging.get().level == "debug");
+      }
+
+      THEN("the section that was never loaded stays unloaded")
+      {
+        REQUIRE(!network.loaded());
+      }
+
+      // The rewritten source dropped the experimental table, so it is in the
+      // file after a store only where the tree the failed load read was not
+      // retained.
+      THEN("a store starts from the tree of the load that succeeded")
+      {
+        document.store();
+
+        const auto text = document_test::text_of(file.path());
+        REQUIRE(text.contains("[experimental]"));
+        REQUIRE(text.contains("from the file"));
+        REQUIRE(!text.contains("rewritten"));
+        REQUIRE(!text.contains("trace"));
+      }
+    }
+
+    WHEN("it is loaded with the create policy")
+    {
+      auto network = document.add_section<document_test::network_v2>("network");
+      const auto before = document_test::text_of(file.path());
+
+      // The flags combine, so creating what is missing does not give up
+      // migrating what is there.
+      using arude::bitwise_operators::operator|;
+
+      document.load(arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current);
+
+      THEN("the missing section holds its defaults")
+      {
+        REQUIRE(network.loaded());
+        REQUIRE(network.get().host == "localhost");
+        REQUIRE(network.get().port == 8443);
+      }
+
+      THEN("the sections that are in the file hold the file's values")
+      {
+        REQUIRE(root.get().name == "from the file");
+        REQUIRE(logging.get().level == "debug");
+      }
+
+      THEN("the file is as it was, since a load never writes")
+      {
+        REQUIRE(document_test::text_of(file.path()) == before);
+      }
+
+      AND_WHEN("the document is stored")
+      {
+        document.store();
+
+        THEN("the section is added to the file")
+        {
+          const auto keys = document_test::keys_in(file.path(), "network");
+          REQUIRE(keys.contains("version"));
+          REQUIRE(keys.contains("host"));
+          REQUIRE(keys.contains("port"));
+        }
+
+        THEN("everything else in the file is kept")
+        {
+          const auto text = document_test::text_of(file.path());
+          REQUIRE(text.contains("from the file"));
+          REQUIRE(text.contains("debug"));
+          REQUIRE(text.contains("[experimental]"));
+          REQUIRE(text.contains("flag"));
+        }
+
+        THEN("the next start-up loads it without the create policy")
+        {
+          auto next_manager = arude::config::config_manager{};
+          auto next_document =
+            next_manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+          auto next_root = next_document.add_root<document_test::app>();
+          auto next_logging = next_document.add_section<document_test::logging>("logging");
+          auto next_network = next_document.add_section<document_test::network_v2>("network");
+
+          next_document.load();
+
+          REQUIRE(next_root.get().name == "from the file");
+          REQUIRE(next_logging.get().level == "debug");
+          REQUIRE(next_network.get().port == 8443);
+        }
+      }
+    }
+  }
+}
+
+// The root has no key of its own to be missing, so what stands for it is a
+// value at the top level that is not a table. Tables alone, arrays of tables
+// among them, are other owners'.
+SCENARIO("a root section missing from an existing source is created or reported", "[config][document]")
+{
+  GIVEN("a file holding only a registered section's table and a table nobody registers")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_missing_root.toml"};
+    test_helpers::write_text(
+      file.path(),
+      "[network]\n"
+      "version = 2\n"
+      "host = \"from the file\"\n"
+      "port = 9443\n"
+      "\n"
+      "[experimental]\n"
+      "flag = true\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+    auto network = document.add_section<document_test::network_v2>("network");
+
+    WHEN("it is loaded without the create policy")
+    {
+      THEN("the load is a not_found that names the root section")
+      {
+        try
+        {
+          document.load();
+          FAIL("loading a source that lacks the root section should have thrown");
+        }
+        catch(const arude::config::exception_t& ex)
+        {
+          REQUIRE(ex.data() == arude::config::config_error::not_found);
+          REQUIRE(ex.str().contains("the root section"));
+        }
+
+        REQUIRE(!network.loaded());
+      }
+    }
+
+    WHEN("it is loaded with the create policy")
+    {
+      document.load(arude::config::load_policy::create);
+
+      THEN("the root takes its defaults")
+      {
+        REQUIRE(root.loaded());
+        REQUIRE(root.get().name == "example");
+        REQUIRE(root.get().version == arude::config::version_of<document_test::app>());
+      }
+
+      THEN("the section that is in the file holds the file's values")
+      {
+        REQUIRE(network.get().host == "from the file");
+        REQUIRE(network.get().port == 9443);
+      }
+
+      AND_WHEN("the document is stored")
+      {
+        document.store();
+
+        THEN("the root is written beside what was there")
+        {
+          const auto keys = document_test::keys_in(file.path(), "");
+          REQUIRE(keys.contains("version"));
+          REQUIRE(keys.contains("name"));
+          REQUIRE(keys.contains("network"));
+          REQUIRE(keys.contains("experimental"));
+        }
+      }
+    }
+  }
+
+  GIVEN("a file holding a registered section's table and an array of tables nobody registers")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_missing_root_array.toml"};
+    test_helpers::write_text(
+      file.path(),
+      "[[plugins]]\n"
+      "name = \"first\"\n"
+      "\n"
+      "[[plugins]]\n"
+      "name = \"second\"\n"
+      "\n"
+      "[network]\n"
+      "version = 2\n"
+      "host = \"from the file\"\n"
+      "port = 9443\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+    auto network = document.add_section<document_test::network_v2>("network");
+
+    WHEN("it is loaded without the create policy")
+    {
+      THEN("the load is a not_found that names the root section, not a malformed root")
+      {
+        try
+        {
+          document.load();
+          FAIL("loading a source that lacks the root section should have thrown");
+        }
+        catch(const arude::config::exception_t& ex)
+        {
+          REQUIRE(ex.data() == arude::config::config_error::not_found);
+          REQUIRE(ex.str().contains("the root section"));
+        }
+      }
+    }
+
+    WHEN("it is loaded with the create policy and stored")
+    {
+      document.load(arude::config::load_policy::create);
+      document.store();
+
+      THEN("the root takes its defaults, and the section the file's values")
+      {
+        REQUIRE(root.get().name == "example");
+        REQUIRE(network.get().host == "from the file");
+      }
+
+      THEN("the root is written beside the array of tables, which is kept")
+      {
+        const auto keys = document_test::keys_in(file.path(), "");
+        REQUIRE(keys.contains("version"));
+        REQUIRE(keys.contains("name"));
+        REQUIRE(keys.contains("plugins"));
+
+        const auto text = document_test::text_of(file.path());
+        REQUIRE(text.contains("first"));
+        REQUIRE(text.contains("second"));
+      }
+    }
+  }
+
+  GIVEN("a file with a value at the top level that is not a table, and no version")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_versionless_root.toml"};
+    test_helpers::write_text(file.path(), "name = \"nameless\"\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+
+    THEN("the root is there and malformed, which the create policy does not paper over")
+    {
+      try
+      {
+        document.load(arude::config::load_policy::create);
+        FAIL("loading a root without a version should have thrown");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        REQUIRE(ex.data() == arude::config::config_error::invalid_payload);
+      }
+
+      REQUIRE(!root.loaded());
     }
   }
 }

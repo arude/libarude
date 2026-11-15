@@ -83,7 +83,8 @@ public: // Typedefs / Constants
   using error_t = arude::config::config_error;
 
   ///
-  /// What load() should do about a source that is missing or of another version.
+  /// What load() should do about a source or a section that is missing, or of
+  /// another version.
   /// Defined in arude/config/load_policy.hpp; this alias keeps call sites
   /// spelling it config_manager::load_policy_t.
   ///
@@ -156,7 +157,8 @@ public: // Methods
   /// after another: where one throws, those loaded before it keep what they
   /// read, and those after it are not loaded.
   ///
-  /// \param policy What to do about a missing or differently versioned document.
+  /// \param policy What to do about a source or a section that is missing, or
+  ///               of another version.
   /// \throws exception_t As config_document_handle::load does, for the first
   ///                     document that fails.
   ///
