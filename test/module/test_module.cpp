@@ -579,8 +579,8 @@ SCENARIO("the module carries the configuration specializations", "[module][confi
   {
     THEN("it formats as its name, which is what the formatter anchor is for")
     {
-      REQUIRE(std::format("{}", arude::config::config_manager::error_t::io_error) == "io_error");
-      STATIC_REQUIRE(arude::enum_name(arude::config::config_manager::error_t::not_found) == "not_found");
+      REQUIRE(std::format("{}", arude::config::config_error::io_error) == "io_error");
+      STATIC_REQUIRE(arude::enum_name(arude::config::config_error::not_found) == "not_found");
     }
   }
 }

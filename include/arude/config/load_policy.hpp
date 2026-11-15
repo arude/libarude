@@ -25,6 +25,10 @@ namespace arude::config
 /// that arude/enum.hpp re-exports as arude::bitwise_operators; is_set() is
 /// what reads one back out.
 ///
+/// A section's version must match the one asked for exactly unless
+/// upgrade_to_current is given; without it, an older section is an
+/// invalid_version, as is a newer one whatever the policy says.
+///
 enum class load_policy : std::uint8_t
 {
   ///
@@ -50,12 +54,7 @@ enum class load_policy : std::uint8_t
   ///
   /// An older version is migrated forward; without this, an older source is an error.
   ///
-  upgrade_to_current = 0x02,
-
-  ///
-  /// The version must match exactly, whatever upgrade_to_current says.
-  ///
-  strict_version = 0x04
+  upgrade_to_current = 0x02
 };
 
 ///

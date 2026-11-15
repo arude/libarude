@@ -715,19 +715,19 @@ SCENARIO("per-section versions migrate independently", "[config][document]")
       }
 
       THEN(
-        "the version decision is per section, so strict_version refuses the behind section even though the root is "
-        "current")
+        "the version decision is per section, so a load without upgrade_to_current refuses the behind section even "
+        "though the root is current")
       {
-        auto strict_manager = arude::config::config_manager{};
-        auto strict_document =
-          strict_manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
-        std::ignore = strict_document.add_root<document_test::app>();
-        std::ignore = strict_document.add_section<document_test::network_v2>("network");
+        auto exact_manager = arude::config::config_manager{};
+        auto exact_document =
+          exact_manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+        std::ignore = exact_document.add_root<document_test::app>();
+        std::ignore = exact_document.add_section<document_test::network_v2>("network");
 
         try
         {
-          strict_document.load(arude::config::load_policy::strict_version);
-          FAIL("a strict load of a behind section should have thrown");
+          exact_document.load(arude::config::load_policy::none);
+          FAIL("a load of a behind section without upgrade_to_current should have thrown");
         }
         catch(const arude::config::exception_t& ex)
         {
@@ -1434,13 +1434,13 @@ SCENARIO("a key a section no longer produces leaves the file", "[config][documen
         REQUIRE(keys.contains("version"));
       }
 
-      // The strict load alone passes whether or not the old key is still
-      // beside the new one, as a document ignores keys its types do not
-      // declare. What it cannot pass with is host surviving the store that
-      // follows it.
+      // A load without upgrade_to_current alone passes whether or not the old
+      // key is still beside the new one, as a document ignores keys its types
+      // do not declare. What it cannot pass with is host surviving the store
+      // that follows it.
       THEN("it reads back as the current version, and a store from that has no old key either")
       {
-        document.load(arude::config::load_policy::strict_version);
+        document.load(arude::config::load_policy::none);
         REQUIRE(server.get().hostname == "old-host");
 
         document.store();

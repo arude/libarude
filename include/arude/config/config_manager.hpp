@@ -39,6 +39,7 @@
 ///
 #pragma once
 
+#include "arude/config/common.hpp"
 #include "arude/config/config_document.hpp"
 #include "arude/config/config_handle.hpp"
 #include "arude/config/endpoint.hpp"
@@ -74,22 +75,6 @@ namespace arude::config
 ///
 class config_manager final : public noncopyable
 {
-public: // Typedefs / Constants
-  ///
-  /// What went wrong, carried as the payload of every exception thrown here.
-  /// Defined in arude/config/common.hpp; this alias keeps call sites spelling
-  /// it config_manager::error_t.
-  ///
-  using error_t = arude::config::config_error;
-
-  ///
-  /// What load() should do about a source or a section that is missing, or of
-  /// another version.
-  /// Defined in arude/config/load_policy.hpp; this alias keeps call sites
-  /// spelling it config_manager::load_policy_t.
-  ///
-  using load_policy_t = arude::config::load_policy;
-
 public: // Methods
   ///
   /// Registers a document: one endpoint instance and one transport instance

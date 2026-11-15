@@ -266,7 +266,7 @@ auto write_section_value(
 ///
 /// The version decision for one section.
 /// Probes the version in the section's own subtree, returns the exact match,
-/// rejects on strict_version or an absent upgrade_to_current, and migrates
+/// rejects any other version unless upgrade_to_current is given, and migrates
 /// otherwise.
 ///
 /// A named section that is not in the document is an invalid_payload here, as
@@ -564,7 +564,7 @@ auto parse_section(
     }
   }
 
-  if(is_set(policy, load_policy::strict_version) || !is_set(policy, load_policy::upgrade_to_current))
+  if(!is_set(policy, load_policy::upgrade_to_current))
   {
     throw exception_t{
       std::format("arude::config: {} is version {}, and version {} was asked for.", source, version, version_of<T>()),
