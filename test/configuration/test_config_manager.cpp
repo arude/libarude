@@ -15,11 +15,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstddef>
+#include <format>
 #include <map>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -103,9 +106,85 @@ auto transport_memory::write(const std::span<const std::byte> bytes) const -> vo
   store_->insert_or_assign(slot_, std::vector<std::byte>{cbegin(bytes), cend(bytes)});
 }
 
+///
+/// A transport with nothing behind it, holding a token that every copy shares,
+/// so a test can tell from a std::weak_ptr to the token whether the document
+/// the transport was moved into still exists.
+///
+class transport_tracked final
+{
+public: // Constants
+  static constexpr auto name = std::string_view{"tracked"};
+
+public: // Structors
+  ///
+  /// \param token The token to hold. Kept, in this and in every copy.
+  ///
+  explicit transport_tracked(std::shared_ptr<const int> token);
+
+public: // Accessors
+  [[nodiscard]] auto location() const -> std::string;
+  [[nodiscard]] auto writable() const -> bool;
+  [[nodiscard]] auto exists() const -> bool;
+  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+
+public: // Methods
+  auto write(std::span<const std::byte> bytes) const -> void;
+
+private: // Variables
+  std::shared_ptr<const int> token_;
+};
+
+///
+///
+transport_tracked::transport_tracked(std::shared_ptr<const int> token)
+  : token_{std::move(token)}
+{
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_tracked::location() const -> std::string
+{
+  return std::format("{}:slot", name);
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_tracked::writable() const -> bool
+{
+  return true;
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_tracked::exists() const -> bool
+{
+  return false;
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_tracked::read() const -> std::vector<std::byte>
+{
+  return {};
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_tracked::write([[maybe_unused]] const std::span<const std::byte> bytes) const -> void
+{
+}
+
 } // namespace config_manager_test
 
 static_assert(arude::config::transport_c<config_manager_test::transport_memory>);
+static_assert(arude::config::transport_c<config_manager_test::transport_tracked>);
 
 SCENARIO("a location can only be registered once", "[config][config_manager]")
 {
@@ -238,6 +317,107 @@ SCENARIO("a document handle outlives its manager", "[config][config_manager]")
       {
         REQUIRE(root.get().name == "outliving");
       }
+    }
+  }
+
+  GIVEN("a manager that registered a document and went away before any section was added")
+  {
+    auto store = config_manager_test::transport_memory::store_t{};
+    auto document = [&]() -> arude::config::config_document_handle
+    {
+      auto manager = arude::config::config_manager{};
+      return manager.register_document(
+        arude::config::endpoint_toml{}, config_manager_test::transport_memory{"slot", store});
+    }();
+
+    WHEN("a root and a named section are added through the surviving handle")
+    {
+      // Adding a section registers its type, and the index the registration
+      // goes into was the manager's.
+      auto root = document.add_root<test_helpers::config_test_t>();
+      auto legacy = document.add_section<test_helpers::config_test_v1>("legacy");
+
+      THEN("the sections are attached, and as empty as any other new section")
+      {
+        REQUIRE(root.name().empty());
+        REQUIRE(legacy.name() == "legacy");
+        REQUIRE_FALSE(root.loaded());
+        REQUIRE_FALSE(legacy.loaded());
+      }
+
+      AND_WHEN("both are set and stored, and the cache is then changed and reloaded")
+      {
+        auto written_root = test_helpers::config_test_t{};
+        written_root.name = "stored root";
+
+        auto written_legacy = test_helpers::config_test_v1{};
+        written_legacy.name = "stored section";
+
+        root.set(written_root);
+        legacy.set(written_legacy);
+        root.store();
+
+        // Reaches the cache only, so reading the stored names back below
+        // shows that load() went to the transport.
+        auto unsaved = test_helpers::config_test_t{};
+        unsaved.name = "cache only";
+        root.set(unsaved);
+
+        legacy.load();
+
+        THEN("the transport was written")
+        {
+          REQUIRE(store.contains("slot"));
+        }
+
+        THEN("both handles return what was stored")
+        {
+          REQUIRE(root.get().name == "stored root");
+          REQUIRE(legacy.get().name == "stored section");
+        }
+      }
+    }
+  }
+
+  // The manager's index holds every document and section registered with it,
+  // so a document that held the index in turn would keep both alive for good.
+  GIVEN("a manager, a document registered with it and sections added to that, all gone")
+  {
+    auto token = std::make_shared<const int>(0);
+    const auto tracked = std::weak_ptr<const int>{token};
+
+    {
+      auto manager = arude::config::config_manager{};
+      auto document = manager.register_document(
+        arude::config::endpoint_toml{}, config_manager_test::transport_tracked{std::move(token)});
+      auto root = document.add_root<test_helpers::config_test_t>();
+      auto legacy = document.add_section<test_helpers::config_test_v1>("legacy");
+
+      REQUIRE(!tracked.expired());
+    }
+
+    THEN("the document went with them, as nothing it holds keeps it alive")
+    {
+      REQUIRE(tracked.expired());
+    }
+  }
+}
+
+SCENARIO("a manager is constructed in place", "[config][config_manager]")
+{
+  GIVEN("the manager type")
+  {
+    THEN("it cannot be copied")
+    {
+      STATIC_REQUIRE_FALSE(std::is_copy_constructible_v<arude::config::config_manager>);
+      STATIC_REQUIRE_FALSE(std::is_copy_assignable_v<arude::config::config_manager>);
+    }
+
+    THEN("it cannot be moved either")
+    {
+      // The handles are what travels; the manager stays where it was built.
+      STATIC_REQUIRE_FALSE(std::is_move_constructible_v<arude::config::config_manager>);
+      STATIC_REQUIRE_FALSE(std::is_move_assignable_v<arude::config::config_manager>);
     }
   }
 }

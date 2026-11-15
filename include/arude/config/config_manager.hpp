@@ -44,6 +44,7 @@
 #include "arude/config/endpoint.hpp"
 #include "arude/config/load_policy.hpp"
 #include "arude/config/transport.hpp"
+#include "arude/config/type_registry.hpp"
 #include "arude/exception_report.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/type_key.hpp"
@@ -65,9 +66,11 @@ namespace arude::config
 ///
 /// The manager: two registries, documents by location and sections by type.
 ///
-/// Move-only, through arude::noncopyable: two managers over one set of
-/// sources would each cache half the truth, while moving one into place after
-/// building it is exactly how an application is meant to get hold of one.
+/// Neither copyable nor movable. arude::noncopyable takes the copies away,
+/// because two managers over one set of sources would each cache half the
+/// truth, and the mutex guarding the documents takes the moves with it. So a
+/// manager is constructed in place, where it is to live; what travels is the
+/// handles, which stay valid after the manager is destroyed.
 ///
 class config_manager final : public noncopyable
 {
@@ -154,24 +157,13 @@ public: // Methods
   ///
   auto load_all(load_policy policy = load_policy::upgrade_to_current) -> void;
 
-private: // Helpers
-  ///
-  /// Registers one section with the type index, keeping every registration
-  /// so an ambiguity error can name the locations.
-  ///
-  /// \param key The type key, from arude::type_key<T>().
-  /// \param section The section to register. Kept.
-  /// \param document The document it belongs to. Kept.
-  ///
-  auto index_type(
-    const type_key_t& key,
-    std::shared_ptr<detail::section_base> section,
-    std::shared_ptr<detail::document_base> document) -> void;
-
-private: // Variables
-  mutable std::shared_mutex mutex_;
+private:                            // Variables
+  mutable std::shared_mutex mutex_; // Guards documents_; the type index locks itself.
   std::unordered_map<std::string, std::shared_ptr<detail::document_base>> documents_;
-  std::unordered_map<type_key_t, detail::type_entry> types_; // Keyed by type_key<T>().
+
+  // Shared, so that a document can hold it weakly and find out that the
+  // manager is gone rather than reach into a destroyed one.
+  std::shared_ptr<detail::type_registry> types_ = std::make_shared<detail::type_registry>();
 };
 
 ///
@@ -191,13 +183,7 @@ auto config_manager::register_document(E format, Tr carrier) -> config_document_
     }
   }
 
-  auto document = std::make_shared<detail::document<E, Tr>>(
-    std::move(format),
-    std::move(carrier),
-    [this](
-      const type_key_t& key,
-      std::shared_ptr<detail::section_base> section,
-      std::shared_ptr<detail::document_base> doc) -> void { index_type(key, std::move(section), std::move(doc)); });
+  auto document = std::make_shared<detail::document<E, Tr>>(std::move(format), std::move(carrier), types_);
 
   {
     const auto lock = std::scoped_lock{mutex_};
@@ -227,20 +213,20 @@ auto config_manager::get() const -> T
 template<configuration_c T>
 auto config_manager::find() const -> config_handle<T>
 {
-  const auto lock = std::shared_lock{mutex_};
+  // A copy, so the registry is not held while the documents are asked for
+  // their locations below.
+  const auto registrations = types_->registrations(type_key<T>());
 
-  const auto found = types_.find(type_key<T>());
-
-  if(found == types_.end() || found->second.registrations.empty())
+  if(registrations.empty())
   {
     throw exception_t{std::format("arude::config: {} is not registered.", type_name<T>()), config_error::not_found};
   }
 
-  if(found->second.registrations.size() > 1)
+  if(registrations.size() > 1)
   {
     auto locations = std::string{};
 
-    for(const auto& registration : found->second.registrations)
+    for(const auto& registration : registrations)
     {
       if(!locations.empty())
       {
@@ -253,15 +239,11 @@ auto config_manager::find() const -> config_handle<T>
     }
 
     throw exception_t{
-      std::format(
-        "arude::config: {} is registered in {} places: {}.",
-        type_name<T>(),
-        found->second.registrations.size(),
-        locations),
+      std::format("arude::config: {} is registered in {} places: {}.", type_name<T>(), registrations.size(), locations),
       config_error::ambiguous_type};
   }
 
-  const auto& registration = found->second.registrations.front();
+  const auto& registration = registrations.front();
 
   return config_handle<T>{std::static_pointer_cast<detail::section<T>>(registration.section), registration.document};
 }
@@ -303,18 +285,6 @@ inline auto config_manager::load_all(const load_policy policy) -> void
   {
     document->load(policy);
   }
-}
-
-///
-///
-inline auto config_manager::index_type(
-  const type_key_t& key, std::shared_ptr<detail::section_base> section, std::shared_ptr<detail::document_base> document)
-  -> void
-{
-  const auto lock = std::scoped_lock{mutex_};
-
-  types_[key].registrations.push_back(
-    detail::type_entry::registration{.section = std::move(section), .document = std::move(document)});
 }
 
 } // namespace arude::config

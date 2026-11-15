@@ -53,6 +53,7 @@
 #include "arude/config/migration.hpp"
 #include "arude/config/transport.hpp"
 #include "arude/config/transport_file.hpp"
+#include "arude/config/type_registry.hpp"
 
 // Out of the sorted group above because it is conditional. The HTTPS transport
 // is the one part of libarude that has to be asked for, since TLS is a

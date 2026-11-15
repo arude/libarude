@@ -46,6 +46,7 @@
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
 #include "arude/config/transport.hpp"
+#include "arude/config/type_registry.hpp"
 #include "arude/exception_report.hpp"
 #include "arude/type_key.hpp"
 
@@ -54,7 +55,6 @@
 #include <cstddef>
 #include <flat_set>
 #include <format>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -69,35 +69,6 @@ namespace arude::config::detail
 
 class document_base;
 class section_base;
-
-///
-/// One registration of a type: the section and the document it belongs to.
-/// Non-template, so a manager can hold an index over every type at once.
-///
-struct type_entry
-{
-  ///
-  /// The registrations, one per add_section or add_root of this type.
-  ///
-  struct registration
-  {
-    ///
-    /// The section the type is registered as.
-    ///
-    std::shared_ptr<section_base> section;
-
-    ///
-    /// The document that section belongs to.
-    ///
-    std::shared_ptr<document_base> document;
-  };
-
-  ///
-  /// Every registration, so get<T>() can find the one handle and name the
-  /// locations when there is more than one.
-  ///
-  std::vector<registration> registrations;
-};
 
 ///
 /// A section of a document with its type erased.
@@ -243,6 +214,8 @@ public:
 
   ///
   /// Registers a section with the manager's type index.
+  /// Does nothing once the manager is gone: its index went with it, so there
+  /// is nothing left to register with and nobody left to look the type up.
   ///
   /// \param key The type key, from arude::type_key<T>().
   /// \param section The section to register. Kept.
@@ -269,14 +242,12 @@ public: // Structors
   ///
   /// \param format The endpoint instance. Moved in.
   /// \param carrier The transport instance. Moved in.
-  /// \param registrar Called when a section type is registered, so the
-  ///                  manager's index can pick it up. The manager must
-  ///                  outlive every registration made through this document.
+  /// \param registry The manager's type index, which every section type added
+  ///                 to this document is registered with. Held weakly: the
+  ///                 document does not keep it alive and may outlive it, after
+  ///                 which register_type() does nothing.
   ///
-  document(
-    E format,
-    Tr carrier,
-    std::function<void(const type_key_t&, std::shared_ptr<section_base>, std::shared_ptr<document_base>)> registrar);
+  document(E format, Tr carrier, std::weak_ptr<type_registry> registry);
 
 public: // Overrides
   ///
@@ -332,7 +303,7 @@ private: // Variables
   Tr carrier_;
   rfl::Generic::Object parsed_;
   std::vector<std::shared_ptr<section_base>> sections_;
-  std::function<void(const type_key_t&, std::shared_ptr<section_base>, std::shared_ptr<document_base>)> registrar_;
+  std::weak_ptr<type_registry> registry_; // Weak, as the registry owns this document.
   mutable std::shared_mutex mutex_;
 };
 
@@ -520,13 +491,10 @@ auto section<T>::set_value(const T& value) -> void
 ///
 ///
 template<endpoint_c E, transport_c Tr>
-document<E, Tr>::document(
-  E format,
-  Tr carrier,
-  std::function<void(const type_key_t&, std::shared_ptr<section_base>, std::shared_ptr<document_base>)> registrar)
+document<E, Tr>::document(E format, Tr carrier, std::weak_ptr<type_registry> registry)
   : format_{std::move(format)}
   , carrier_{std::move(carrier)}
-  , registrar_{std::move(registrar)}
+  , registry_{std::move(registry)}
 {
 }
 
@@ -685,7 +653,13 @@ template<endpoint_c E, transport_c Tr>
 auto document<E, Tr>::register_type(
   const type_key_t& key, std::shared_ptr<section_base> section, std::shared_ptr<document_base> document) -> void
 {
-  registrar_(key, std::move(section), std::move(document));
+  // The registry belongs to the manager, and a handle to this document may
+  // have outlived it. The lock keeps the registry alive for the length of the
+  // call where a manager is being destroyed on another thread meanwhile.
+  if(const auto registry = registry_.lock())
+  {
+    registry->add(key, std::move(section), std::move(document));
+  }
 }
 
 ///
@@ -766,6 +740,8 @@ public: // Methods
   /// Adds a section for the root of the document, registering the type with
   /// the manager's index.
   ///
+  /// \see add_section for what happens where the manager is gone.
+  ///
   /// \tparam T Configuration type.
   /// \return The section handle.
   ///
@@ -777,6 +753,10 @@ public: // Methods
   /// manager's index. An empty name is the root. Adding a section after a
   /// load is allowed: it stays disengaged until the next load() and cannot be
   /// written meanwhile.
+  ///
+  /// Where the config_manager the document came from has been destroyed, the
+  /// section is added all the same and the handle returned works in full; only
+  /// the registration is skipped, as the index went with the manager.
   ///
   /// \tparam T Configuration type.
   /// \param name The section's name, which is also its key in the document.
