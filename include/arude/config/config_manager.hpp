@@ -152,8 +152,13 @@ public: // Accessors
 public: // Methods
   ///
   /// Loads every registered document.
+  /// Each document's load is all or nothing, but the documents are loaded one
+  /// after another: where one throws, those loaded before it keep what they
+  /// read, and those after it are not loaded.
   ///
   /// \param policy What to do about a missing or differently versioned document.
+  /// \throws exception_t As config_document_handle::load does, for the first
+  ///                     document that fails.
   ///
   auto load_all(load_policy policy = load_policy::upgrade_to_current) -> void;
 

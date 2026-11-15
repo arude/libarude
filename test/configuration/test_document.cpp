@@ -13,16 +13,27 @@
 #include "test/helpers/write_text.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <rfl/Generic.hpp>
+#include <rfl/toml/read.hpp>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <functional>
 #include <iterator>
+#include <memory>
+#include <optional>
 #include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 namespace document_test
 {
@@ -140,6 +151,68 @@ struct logging
 };
 
 ///
+/// Version 1 of a section whose one field the next version renames.
+///
+struct server_v1
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the file.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// Host the server listens on.
+  ///
+  std::string host = "localhost";
+};
+
+///
+/// Version 2 of the same section: host is spelled hostname, so a file written
+/// by version 1 holds a key that version 2 does not produce.
+///
+struct server_v2
+{
+  ///
+  /// The version before this one, which migration walks back through.
+  ///
+  using previous_t = server_v1;
+
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{2};
+
+  ///
+  /// The version carried in the file.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// What version 1 called host.
+  ///
+  std::string hostname = "localhost";
+};
+
+///
+/// Produces a version 2 server section from a version 1 one.
+/// \param val Section to upgrade. Not retained.
+/// \return The same section as version 2, host carried over as hostname.
+///
+[[nodiscard]] constexpr auto upgrade(const server_v1& val) -> server_v2;
+
+///
+/// Produces a version 1 server section from a version 2 one.
+/// \param val Section to downgrade. Not retained.
+/// \return The same section as version 1, hostname carried over as host.
+///
+[[nodiscard]] constexpr auto downgrade(const server_v2& val) -> server_v1;
+
+///
 ///
 constexpr auto upgrade(const network_v1& val) -> network_v2
 {
@@ -154,6 +227,20 @@ constexpr auto downgrade(const network_v2& val) -> network_v1
 }
 
 ///
+///
+constexpr auto upgrade(const server_v1& val) -> server_v2
+{
+  return server_v2{.hostname = val.host};
+}
+
+///
+///
+constexpr auto downgrade(const server_v2& val) -> server_v1
+{
+  return server_v1{.host = val.hostname};
+}
+
+///
 /// Returns the whole file as text, for asserting on what a store produced.
 /// \param path File to read.
 /// \return The text.
@@ -162,6 +249,108 @@ auto text_of(const std::filesystem::path& path) -> std::string
 {
   auto stream = std::ifstream{path};
   return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+}
+
+///
+/// What a scripted transport reads and writes, shared by all its copies.
+///
+struct scripted_source
+{
+  ///
+  /// The source as text, or nothing while there is no source.
+  ///
+  std::optional<std::string> text;
+
+  ///
+  /// A step to run inside the next read, after the bytes that read returns
+  /// were taken. Cleared before it runs, so it runs once, and a load it
+  /// starts reads without it.
+  ///
+  std::function<void()> on_read;
+};
+
+///
+/// A transport holding its source in memory, whose reads can run a step of
+/// the test's, so a test can act in the middle of a load without a thread.
+///
+class transport_scripted final
+{
+public: // Constants
+  static constexpr auto name = std::string_view{"scripted"};
+
+public: // Structors
+  ///
+  /// \param source What the transport reads and writes. Kept.
+  ///
+  explicit transport_scripted(std::shared_ptr<scripted_source> source);
+
+public: // Accessors
+  [[nodiscard]] auto location() const -> std::string;
+  [[nodiscard]] auto writable() const -> bool;
+  [[nodiscard]] auto exists() const -> bool;
+  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+
+public: // Methods
+  auto write(std::span<const std::byte> bytes) const -> void;
+
+private: // Variables
+  std::shared_ptr<scripted_source> source_;
+};
+
+///
+///
+transport_scripted::transport_scripted(std::shared_ptr<scripted_source> source)
+  : source_{std::move(source)}
+{
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_scripted::location() const -> std::string
+{
+  return std::format("{}:source", name);
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_scripted::writable() const -> bool
+{
+  return true;
+}
+
+///
+///
+auto transport_scripted::exists() const -> bool
+{
+  return source_->text.has_value();
+}
+
+///
+///
+auto transport_scripted::read() const -> std::vector<std::byte>
+{
+  if(!source_->text.has_value())
+  {
+    throw arude::config::exception_t{"scripted: there is no source to read.", arude::config::config_error::io_error};
+  }
+
+  auto bytes = arude::config::as_bytes(*source_->text);
+
+  if(auto step = std::exchange(source_->on_read, nullptr))
+  {
+    step();
+  }
+
+  return bytes;
+}
+
+///
+///
+auto transport_scripted::write(const std::span<const std::byte> bytes) const -> void
+{
+  source_->text = arude::config::as_text(bytes);
 }
 
 } // namespace
@@ -554,11 +743,13 @@ SCENARIO("reading a section that was never loaded is a not_found", "[config][doc
   }
 }
 
-SCENARIO("committing twice does not undo the first commit", "[config][document]")
+// A load keeps what it read to itself and installs it in one step, so it has
+// nowhere to leave a half-finished result for the next load to trip over.
+SCENARIO("a second load does not disengage what the first loaded", "[config][document]")
 {
   GIVEN("a document loaded once")
   {
-    const auto file = test_helpers::temp_file{"arude_document_recommit.toml"};
+    const auto file = test_helpers::temp_file{"arude_document_reload.toml"};
     test_helpers::write_text(file.path(), "version = 1\nname = \"kept\"\n");
 
     auto manager = arude::config::config_manager{};
@@ -568,17 +759,146 @@ SCENARIO("committing twice does not undo the first commit", "[config][document]"
 
     document.load();
 
-    WHEN("it is loaded again, as two concurrent loads interleave")
+    WHEN("it is loaded again from the same source")
     {
       document.load();
 
-      // The defect: commit() assigned the disengaged pending optional the
-      // previous commit had left behind, so a load that succeeded reported
-      // loaded() == false and store() then omitted the section entirely.
-      THEN("the value survives")
+      THEN("the value is still loaded")
       {
         REQUIRE(root.loaded());
         REQUIRE(root.get().name == "kept");
+      }
+
+      THEN("a store still writes the section")
+      {
+        std::filesystem::remove(file.path());
+        document.store();
+
+        REQUIRE(document_test::text_of(file.path()).contains("kept"));
+      }
+    }
+
+    WHEN("the source changes and it is loaded again")
+    {
+      test_helpers::write_text(file.path(), "version = 1\nname = \"changed\"\n");
+      document.load();
+
+      THEN("the second load's value is the one cached")
+      {
+        REQUIRE(root.loaded());
+        REQUIRE(root.get().name == "changed");
+      }
+    }
+  }
+}
+
+// The sections a load works through are the ones attached when it started.
+// One attached while the source is being read is not part of that load: it
+// stays disengaged, rather than failing the load for not being in a source
+// that was written before it existed.
+SCENARIO("a section attached while a load is under way is not part of that load", "[config][document]")
+{
+  GIVEN("a document whose transport attaches sections in the middle of its read")
+  {
+    auto source = std::make_shared<document_test::scripted_source>();
+    source->text = "version = 1\n"
+                   "name = \"from the source\"\n";
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, document_test::transport_scripted{source});
+    auto root = document.add_root<document_test::app>();
+
+    // Enough of them that the list they are attached to has to grow, so the
+    // load cannot be working through that list itself.
+    static constexpr auto attached_during_read = std::size_t{64};
+    auto late = std::vector<arude::config::config_handle<document_test::network_v2>>{};
+
+    source->on_read = [&document, &late] -> void
+    {
+      for(auto i = std::size_t{0}; i < attached_during_read; ++i)
+      {
+        late.push_back(document.add_section<document_test::network_v2>(std::format("late_{}", i)));
+      }
+    };
+
+    WHEN("it is loaded without the create policy")
+    {
+      document.load();
+
+      THEN("the load succeeds, and fills the section attached before it")
+      {
+        REQUIRE(root.loaded());
+        REQUIRE(root.get().name == "from the source");
+      }
+
+      THEN("every section attached during it stays disengaged")
+      {
+        REQUIRE(late.size() == attached_during_read);
+        REQUIRE(std::ranges::none_of(late, [](const auto& section) -> bool { return section.loaded(); }));
+      }
+    }
+  }
+}
+
+// Of two loads under way at once, the one that started later wins, so the
+// tree a store starts from and the value every section holds come from one
+// read. Run on one thread: the transport starts the second load from inside
+// the first one's read, after taking the bytes that read returns.
+SCENARIO("of two loads under way at once, the later one's read is the one that stands", "[config][document]")
+{
+  GIVEN("a source whose renamed section is still at version 1, read by a load that a second load overtakes")
+  {
+    auto source = std::make_shared<document_test::scripted_source>();
+    source->text = "version = 1\n"
+                   "name = \"first read\"\n"
+                   "\n"
+                   "[server]\n"
+                   "version = 1\n"
+                   "host = \"old-host\"\n";
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, document_test::transport_scripted{source});
+    auto root = document.add_root<document_test::app>();
+    auto attached = std::vector<arude::config::config_handle<document_test::server_v2>>{};
+
+    // Between the two loads a section is attached, so the first load does not
+    // know it and the second one does, and the source moves on to version 2.
+    source->on_read = [&source, &document, &attached] -> void
+    {
+      attached.push_back(document.add_section<document_test::server_v2>("server"));
+      source->text = "version = 1\n"
+                     "name = \"second read\"\n"
+                     "\n"
+                     "[server]\n"
+                     "version = 2\n"
+                     "hostname = \"new-host\"\n";
+
+      document.load();
+    };
+
+    WHEN("the first load finishes after the second")
+    {
+      document.load();
+
+      THEN("every section holds the second read")
+      {
+        REQUIRE(root.get().name == "second read");
+        REQUIRE(attached.size() == 1);
+        REQUIRE(attached.at(0).get().hostname == "new-host");
+      }
+
+      THEN("a store writes the second read, not one read's table under the other's keys")
+      {
+        document.store();
+
+        const auto stored = rfl::toml::read<rfl::Generic>(source->text.value()).value().to_object().value();
+        const auto table = stored.get("server").value().to_object().value();
+
+        REQUIRE(stored.get("name").value().to_string().value() == "second read");
+        REQUIRE(table.get("hostname").has_value());
+        REQUIRE(!table.get("host").has_value());
       }
     }
   }

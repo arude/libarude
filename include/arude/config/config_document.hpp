@@ -31,16 +31,24 @@
 /// inside load(), before any section was engaged, would emit a document with
 /// every section skipped.
 ///
+/// load() is all or nothing. Every section is read before any is changed, so
+/// a load that fails — for one section or for the whole source — leaves every
+/// section and the retained tree as they were.
+///
 /// Locking: one shared_mutex per document, not per section — sections cannot
 /// be locked independently when a write serializes them all together. The I/O
-/// and the parsing happen outside that lock, and the lock is taken only to
-/// swap the finished values in, or a slow fetch would block every get() on
-/// that document for the length of the request. The mutex guards the cache
-/// and nothing else: it is not held across I/O, so a read overlapping a write
-/// of the same source is the transport's to make safe, as transport_file does
-/// by replacing the file in one step. There is no cross-process locking
-/// either: two processes writing one document still race, and the last write
-/// wins.
+/// and the parsing happen outside that lock, on a snapshot of the sections
+/// taken under it, and the lock is taken only to swap the finished values in,
+/// or a slow fetch would block every get() on that document for the length of
+/// the request. A load keeps what it read to itself until that swap, and of
+/// two loads under way at once the one that started later wins: the other
+/// installs nothing once it has, so the cache never holds a mix of two reads.
+/// A section attached while a load is under way is not part of that load and
+/// stays disengaged. The mutex guards the cache and nothing else: it is not
+/// held across I/O, so a read overlapping a write of the same source is the
+/// transport's to make safe, as transport_file does by replacing the file in
+/// one step. There is no cross-process locking either: two processes writing
+/// one document still race, and the last write wins.
 ///
 #pragma once
 
@@ -56,8 +64,10 @@
 #include <rfl/Generic.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <flat_set>
 #include <format>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -106,24 +116,24 @@ public:
   [[nodiscard]] virtual auto name() const -> std::string_view = 0;
 
   ///
-  /// Reads the section's value out of a parsed document.
-  /// Computes into a pending value and does not touch the cached one: the
-  /// document commits pending values under its lock, once every
-  /// section has been read, so a slow parse never blocks a get().
+  /// Prepares a load of the section, and changes nothing yet.
+  /// Reads the section out of a parsed document and hands back the step that
+  /// installs what was read. The section itself is untouched until that step
+  /// runs: the document gathers one from every section first, so a load in
+  /// which any section fails changes none of them, a slow parse never blocks
+  /// a get(), and two loads under way at once each hold steps of their own
+  /// rather than sharing a place to put a half-finished result.
   ///
   /// \param document The parsed document. For the root section the document
   ///                  has every registered subsection already stripped.
   /// \param policy What to do about a differently versioned section.
+  /// \return The step that installs the value read. The document calls it
+  ///         under its exclusive lock, at most once, and keeps the section
+  ///         alive until it has.
   /// \throws exception_t With invalid_payload or invalid_version.
   ///
-  virtual auto read_from(const rfl::Generic::Object& document, load_policy policy) -> void = 0;
-
-  ///
-  /// Swaps the value read by read_from() into the cached value.
-  /// Called by the document under its lock. A no-op where nothing is pending,
-  /// so a second commit cannot undo the first.
-  ///
-  virtual auto commit() -> void = 0;
+  [[nodiscard]] virtual auto prepare_load(const rfl::Generic::Object& document, load_policy policy)
+    -> std::function<void()> = 0;
 
   ///
   /// Engages the section with a default-constructed value.
@@ -178,6 +188,10 @@ public:
 
   ///
   /// Loads the document: one read, one parse, all sections filled.
+  /// All or nothing: where it throws, no section and nothing else the
+  /// document holds has changed. Where a load that started after this one
+  /// has finished first, this one returns having installed nothing, as the
+  /// later read is the one that stands.
   ///
   /// \param policy What to do about a missing or differently versioned document.
   ///
@@ -209,7 +223,8 @@ public:
   [[nodiscard]] virtual auto mutex() const -> std::shared_mutex& = 0;
 
   ///
-  /// Attaches a section. Its value stays disengaged until the next load().
+  /// Attaches a section. Its value stays disengaged until it is set, or until
+  /// a load() that starts after this call has finished.
   ///
   /// \param section The section to attach. Kept.
   ///
@@ -231,7 +246,8 @@ public:
 ///
 /// A document bound to one endpoint instance and one transport instance.
 /// format_ and carrier_ are moved in at construction and only ever used
-/// const, so the mutex guards the sections' values and parsed_ alone.
+/// const, so the mutex guards the rest alone: the list of sections, each
+/// section's value, the retained tree, and the load numbers.
 ///
 /// \tparam E Endpoint type.
 /// \tparam Tr Transport type.
@@ -290,6 +306,9 @@ public: // Overrides
   register_type(const type_key_t& key, std::shared_ptr<section_base> section, std::shared_ptr<document_base> document)
     -> void override;
 
+private: // Typedefs
+  using section_vec_t = std::vector<std::shared_ptr<section_base>>;
+
 private: // Helpers
   ///
   /// Builds the document a root section reads: the parsed tree minus every
@@ -297,15 +316,31 @@ private: // Helpers
   /// fields.
   ///
   /// \param parsed The parsed tree.
+  /// \param sections The sections whose names are stripped.
   /// \return The stripped tree.
   ///
-  [[nodiscard]] auto strip_subsection(const rfl::Generic::Object& parsed) const -> rfl::Generic::Object;
+  [[nodiscard]] static auto strip_subsection(const rfl::Generic::Object& parsed, const section_vec_t& sections)
+    -> rfl::Generic::Object;
+
+  ///
+  /// Starts a load: numbers it, and takes the sections attached so far.
+  /// Both under one lock, so a load numbered later never has fewer sections
+  /// than one numbered earlier. The sections are a copy, so the load can work
+  /// through them outside the lock while attach() adds to the original, and
+  /// every section in it stays alive for as long as the copy does.
+  ///
+  /// \return The sections, in the order they were attached, and the load's
+  ///         number, which is greater than that of every load started before.
+  ///
+  [[nodiscard]] auto begin_load() -> std::pair<section_vec_t, std::uint64_t>;
 
 private: // Variables
   E format_;
   Tr carrier_;
-  rfl::Generic::Object parsed_;
-  std::vector<std::shared_ptr<section_base>> sections_;
+  rfl::Generic::Object parsed_;      // The tree of the source as last loaded, which store() starts from.
+  std::uint64_t loads_begun_ = 0;    // Numbers every load in the order begin_load() was called.
+  std::uint64_t load_installed_ = 0; // The number of the load whose read the cache holds.
+  section_vec_t sections_;
   std::weak_ptr<type_registry> registry_; // Weak, as the registry owns this document.
   mutable std::shared_mutex mutex_;
 };
@@ -340,14 +375,10 @@ public: // Overrides
   [[nodiscard]] auto name() const -> std::string_view override;
 
   ///
-  /// \see section_base::read_from
+  /// \see section_base::prepare_load
   ///
-  auto read_from(const rfl::Generic::Object& document, load_policy policy) -> void override;
-
-  ///
-  /// \see section_base::commit
-  ///
-  auto commit() -> void override;
+  [[nodiscard]] auto prepare_load(const rfl::Generic::Object& document, load_policy policy)
+    -> std::function<void()> override;
 
   ///
   /// \see section_base::reset_to_default
@@ -384,8 +415,6 @@ public: // Accessors
 private: // Variables
   std::string name_;
   std::optional<T> value_;
-  std::optional<T> pending_;
-  mutable std::mutex pending_mutex_;
 };
 
 ///
@@ -407,32 +436,14 @@ auto section<T>::name() const -> std::string_view
 ///
 ///
 template<configuration_c T>
-auto section<T>::read_from(const rfl::Generic::Object& document, const load_policy policy) -> void
+auto section<T>::prepare_load(const rfl::Generic::Object& document, const load_policy policy) -> std::function<void()>
 {
-  const auto lock = std::scoped_lock{pending_mutex_};
+  auto result = detail::parse_section<T>(document, name_, policy, false);
 
-  pending_ = detail::parse_section<T>(document, name_, policy, false);
-}
-
-///
-///
-template<configuration_c T>
-auto section<T>::commit() -> void
-{
-  const auto lock = std::scoped_lock{pending_mutex_};
-
-  // Guarded, not unconditional: two concurrent load()s both read_from and then
-  // both commit, and without this the second assigns the disengaged optional
-  // the first left behind — wiping a value that had just been loaded, so a
-  // successful load reported loaded() == false and store() silently omitted
-  // the section.
-  if(!pending_.has_value())
-  {
-    return;
-  }
-
-  value_ = std::move(pending_);
-  pending_.reset();
+  // What was read lives in the closure and nowhere else until the document
+  // runs it, so a load that is abandoned leaves no trace here, and two loads
+  // cannot see each other's results. Moved out on the one call there is.
+  return [this, result = std::move(result)] mutable -> void { value_ = std::move(result); };
 }
 
 ///
@@ -506,6 +517,12 @@ document<E, Tr>::document(E format, Tr carrier, std::weak_ptr<type_registry> reg
 template<endpoint_c E, transport_c Tr>
 auto document<E, Tr>::load(const load_policy policy) -> void
 {
+  // Everything down to the lock works on this snapshot and on locals: the
+  // I/O and the parsing are the slow part and must not block a get(), and
+  // whatever throws on the way has changed nothing. A section attached after
+  // this line is not part of this load.
+  const auto [sections, number] = begin_load();
+
   auto present = false;
 
   try
@@ -527,6 +544,10 @@ auto document<E, Tr>::load(const load_policy policy) -> void
       config_error::io_error};
   }
 
+  auto parsed = rfl::Generic::Object{};
+  auto installs = std::vector<std::function<void()>>{};
+  installs.reserve(sections.size());
+
   if(!present)
   {
     if(!is_set(policy, load_policy::create))
@@ -541,52 +562,62 @@ auto document<E, Tr>::load(const load_policy policy) -> void
     // writable transport to read a missing one, and it is store() that the
     // never-write-a-disengaged-section rule is written for — a store() from
     // here, before any section is engaged, emitted an empty document and left
-    // the source unparseable on the next run.
-    const auto lock = std::scoped_lock{mutex_};
-
-    for(const auto& section : sections_)
+    // the source unparseable on the next run. The tree goes with the sections:
+    // there is no source, so there is nothing of it to retain.
+    for(const auto& section : sections)
     {
-      section->reset_to_default();
+      installs.push_back([section] -> void { section->reset_to_default(); });
+    }
+  }
+  else
+  {
+    try
+    {
+      parsed = format_.parse(carrier_);
+    }
+    catch(const exception_t&)
+    {
+      // The transport's own error, or the endpoint's invalid_payload. Either is
+      // more precise than io_error; see the note in the exists() branch above.
+      throw;
+    }
+    catch(...)
+    {
+      throw exception_t{
+        std::format("arude::config: '{}' could not be read: {}", carrier_.location(), exception_report()),
+        config_error::io_error};
     }
 
+    const auto stripped = strip_subsection(parsed, sections);
+
+    for(const auto& section : sections)
+    {
+      installs.push_back(section->prepare_load(section->name().empty() ? stripped : parsed, policy));
+    }
+  }
+
+  // The lock is taken once, and only to swap the finished results in: the
+  // tree and every section's value change together, so they always describe
+  // one and the same read.
+  const auto lock = std::scoped_lock{mutex_};
+
+  // A load that started later has installed its read already. Installing
+  // this one over it would leave a section attached in between with the
+  // later read's value beside this read's tree, and a store would then write
+  // the one over the other. Loads are numbered in the order they took their
+  // sections, so the later one holds every section this one does, and its
+  // read stands for all of them.
+  if(load_installed_ > number)
+  {
     return;
   }
 
-  rfl::Generic::Object parsed;
-
-  try
-  {
-    parsed = format_.parse(carrier_);
-  }
-  catch(const exception_t&)
-  {
-    // The transport's own error, or the endpoint's invalid_payload. Either is
-    // more precise than io_error; see the note in the exists() branch above.
-    throw;
-  }
-  catch(...)
-  {
-    throw exception_t{
-      std::format("arude::config: '{}' could not be read: {}", carrier_.location(), exception_report()),
-      config_error::io_error};
-  }
-
-  // All of this outside the lock: parsing is the slow part, and it must not
-  // block get() for the length of a fetch.
-  for(const auto& section : sections_)
-  {
-    const auto document = section->name().empty() ? strip_subsection(parsed) : parsed;
-    section->read_from(document, policy);
-  }
-
-  // The lock is taken only to swap the finished values in.
-  const auto lock = std::scoped_lock{mutex_};
-
+  load_installed_ = number;
   parsed_ = std::move(parsed);
 
-  for(const auto& section : sections_)
+  for(const auto& install : installs)
   {
-    section->commit();
+    install();
   }
 }
 
@@ -668,11 +699,12 @@ auto document<E, Tr>::register_type(
 ///
 ///
 template<endpoint_c E, transport_c Tr>
-auto document<E, Tr>::strip_subsection(const rfl::Generic::Object& parsed) const -> rfl::Generic::Object
+auto document<E, Tr>::strip_subsection(const rfl::Generic::Object& parsed, const section_vec_t& sections)
+  -> rfl::Generic::Object
 {
   auto subsection_names = std::flat_set<std::string>{};
 
-  for(const auto& section : sections_)
+  for(const auto& section : sections)
   {
     if(!section->name().empty())
     {
@@ -691,6 +723,16 @@ auto document<E, Tr>::strip_subsection(const rfl::Generic::Object& parsed) const
   }
 
   return stripped;
+}
+
+///
+///
+template<endpoint_c E, transport_c Tr>
+auto document<E, Tr>::begin_load() -> std::pair<section_vec_t, std::uint64_t>
+{
+  const auto lock = std::scoped_lock{mutex_};
+
+  return {sections_, ++loads_begun_};
 }
 
 } // namespace arude::config::detail
@@ -729,6 +771,8 @@ public: // Accessors
 public: // Methods
   ///
   /// Loads the document: one read, one parse, all sections filled.
+  /// All or nothing: where it throws, every section holds what it held
+  /// before.
   ///
   /// \param policy What to do about a missing or differently versioned document.
   ///
@@ -754,8 +798,9 @@ public: // Methods
   ///
   /// Adds a section under the name given, registering the type with the
   /// manager's index. An empty name is the root. Adding a section after a
-  /// load is allowed: it stays disengaged until the next load() and cannot be
-  /// written meanwhile.
+  /// load is allowed: it stays disengaged, and so leaves its part of the
+  /// source as it is on a store, until it is set or the next load() fills it.
+  /// A load() already under way when the section is added does not fill it.
   ///
   /// Where the config_manager the document came from has been destroyed, the
   /// section is added all the same and the handle returned works in full; only

@@ -114,7 +114,9 @@ public: // Accessors
 public: // Methods
   ///
   /// Loads the whole document this section belongs to.
-  /// Delegates to the document: a section cannot be read alone.
+  /// Delegates to the document: a section cannot be read alone. All or
+  /// nothing: where it throws, this section and every other on the document
+  /// hold what they held before.
   ///
   /// \param policy What to do about a missing or differently versioned document.
   ///
