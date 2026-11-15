@@ -228,8 +228,8 @@ public:
   ///                     with invalid_payload if the source has to be read
   ///                     first and does not parse, in which case it is left
   ///                     as it is and discard_source() is the way past; with
-  ///                     the transport's own error, or io_error, if that read
-  ///                     fails.
+  ///                     the transport's own error, or io_error, if the read
+  ///                     or the write fails.
   ///
   virtual auto store() -> void = 0;
 
@@ -733,7 +733,7 @@ auto document<E, Tr>::store() -> void
     }
   }
 
-  format_.emit(carrier_, output);
+  guarded("written", [this, &output] -> void { format_.emit(carrier_, output); });
 }
 
 ///
@@ -948,7 +948,7 @@ public: // Methods
   ///                     loaded and the source does not parse, in which case
   ///                     the source is left as it is and discard_source() is
   ///                     the way to replace it; with the transport's own
-  ///                     error, or io_error, if that read fails.
+  ///                     error, or io_error, if the read or the write fails.
   ///
   auto store() -> void;
 

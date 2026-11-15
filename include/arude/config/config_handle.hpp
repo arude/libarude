@@ -151,7 +151,7 @@ public: // Methods
   ///                     the source is left as it is and
   ///                     config_document_handle::discard_source() is the way
   ///                     to replace it; with the transport's own error, or
-  ///                     io_error, if that read fails.
+  ///                     io_error, if the read or the write fails.
   ///
   auto store() -> void;
 

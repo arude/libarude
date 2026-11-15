@@ -9,6 +9,7 @@
 
 #include "arude/config.hpp"
 #include "arude/enum.hpp"
+#include "arude/exception.hpp"
 #include "test/helpers/temp_file.hpp"
 #include "test/helpers/write_text.hpp"
 
@@ -1733,6 +1734,46 @@ SCENARIO("of two loads under way at once, the later one's read is the one that s
         REQUIRE(stored.get("name").value().to_string().value() == "second read");
         REQUIRE(table.get("hostname").has_value());
         REQUIRE(!table.get("host").has_value());
+      }
+    }
+  }
+}
+
+SCENARIO("a store that fails below the transport is an io_error", "[config][document]")
+{
+  GIVEN("a file transport whose parent path is a regular file")
+  {
+    const auto blocker = test_helpers::temp_file{"arude_document_blocked_parent"};
+    test_helpers::write_text(blocker.path(), "in the way");
+
+    auto manager = arude::config::config_manager{};
+    auto document = manager.register_document(
+      arude::config::endpoint_toml{}, arude::config::transport_file{blocker.path() / "app.toml"});
+    auto root = document.add_root<document_test::app>();
+
+    WHEN("a section is set and the document stored")
+    {
+      root.set(document_test::app{});
+
+      // The directories leading to the file cannot be created, which the
+      // filesystem library reports as a std::filesystem::filesystem_error.
+      THEN("the failure is the subsystem's own error, naming the location")
+      {
+        try
+        {
+          document.store();
+          FAIL("storing below a regular file should have thrown");
+        }
+        catch(const arude::config::exception_t& ex)
+        {
+          REQUIRE(ex.data() == arude::config::config_error::io_error);
+          REQUIRE(ex.str().contains(document.location()));
+        }
+      }
+
+      THEN("it is catchable as an arude::exception_base")
+      {
+        REQUIRE_THROWS_AS(document.store(), arude::exception_base);
       }
     }
   }

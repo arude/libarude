@@ -269,6 +269,8 @@ public: // Methods
   /// \param bytes Bytes to write. Not retained.
   /// \throws exception_t With io_error if the write fails, which leaves the
   ///                     file as it was.
+  /// \throws std::filesystem::filesystem_error If the directories leading to
+  ///                                          the file cannot be created.
   ///
   auto write(std::span<const std::byte> bytes) const -> void;
 
