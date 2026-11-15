@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <flat_set>
 #include <format>
 #include <ranges>
 #include <span>
@@ -133,6 +134,46 @@ template<configuration_c T>
 [[nodiscard]] auto read_generic(const rfl::Generic& generic, bool reject_unknown_fields) -> T;
 
 ///
+/// A set of keys of one table of a document.
+///
+using key_set_t = std::flat_set<std::string>;
+
+///
+/// What reading a section out of a document yields.
+/// Value-initialised, it is what a section that is not in the source takes
+/// when it is created: the type's defaults, owning nothing.
+///
+/// \tparam T Configuration type.
+///
+template<configuration_c T>
+struct parsed_section
+{
+  ///
+  /// The configuration, migrated to T where the policy allowed it.
+  ///
+  T value{};
+
+  ///
+  /// The keys the section owns in the table it was read from: the ones the
+  /// version found there serialises to, before any migration. A key that an
+  /// older version wrote and the current one has renamed or dropped is among
+  /// them, which is what lets a store take it out again; a key the type never
+  /// declared is not, so it is left alone as somebody else's.
+  ///
+  key_set_t owned_keys;
+};
+
+///
+/// Returns the keys a configuration serialises to.
+///
+/// \tparam T Configuration type.
+/// \param val Configuration to ask. Not retained.
+/// \return The keys, which leave out a std::optional member that is disengaged.
+///
+template<configuration_c T>
+[[nodiscard]] auto keys_of(const T& val) -> key_set_t;
+
+///
 /// Reports whether a section is in a document.
 /// A named section is there when its key is. The root section has no key of
 /// its own, so it is there when the top level holds at least one value that is
@@ -148,19 +189,41 @@ template<configuration_c T>
 [[nodiscard]] auto section_present(const rfl::Generic::Object& document, std::string_view section) -> bool;
 
 ///
+/// Replaces what a section owns in a table with the fields of its value.
+/// An owned key the fields no longer hold is removed. A field is written in
+/// place where its key is already in the table and appended where it is not.
+/// Every other key is kept as it is: the section never owned it, so it is not
+/// the section's to change.
+///
+/// \param table The table as it stands.
+/// \param fields The fields to write.
+/// \param owned_keys The keys the section owns in the table.
+/// \return The table with the section's part replaced.
+///
+[[nodiscard]] auto
+replace_owned(const rfl::Generic::Object& table, const rfl::Generic::Object& fields, const key_set_t& owned_keys)
+  -> rfl::Generic::Object;
+
+///
 /// Writes a configuration into a document as a section.
 /// The version written is the one the type declares, whatever the value's
 /// version member happens to hold. An empty name is the root: the document's
 /// own top-level keys; otherwise the value goes into the nested table under
 /// that name.
 ///
+/// Only what the section owns is replaced, see replace_owned(). With no owned
+/// keys given the value is merged over whatever the table holds, and nothing
+/// is removed.
+///
 /// \tparam T Configuration type.
 /// \param document The document to write into.
 /// \param section The section name, or empty for the root.
 /// \param val Configuration to write. Not retained.
+/// \param owned_keys The keys the section owns in its table, from parsed_section.
 ///
 template<configuration_c T>
-auto write_section_value(rfl::Generic::Object& document, std::string_view section, const T& val) -> void;
+auto write_section_value(
+  rfl::Generic::Object& document, std::string_view section, const T& val, const key_set_t& owned_keys = {}) -> void;
 
 ///
 /// Extracts the section's subtree from the document.
@@ -189,12 +252,14 @@ auto write_section_value(rfl::Generic::Object& document, std::string_view sectio
 /// \param section The section name, or empty for the root.
 /// \param policy What to do about a differently versioned section.
 /// \param reject_unknown_fields Whether a field the type does not declare is an error.
-/// \return The configuration, migrated where the policy allows it.
+/// \return The configuration, migrated where the policy allows it, and the
+///         keys it owns in the document.
 /// \throws exception_t With invalid_payload or invalid_version.
 ///
 template<configuration_c T>
 [[nodiscard]] auto parse_section(
-  const rfl::Generic::Object& document, std::string_view section, load_policy policy, bool reject_unknown_fields) -> T;
+  const rfl::Generic::Object& document, std::string_view section, load_policy policy, bool reject_unknown_fields)
+  -> parsed_section<T>;
 
 ///
 /// Parses a subtree as whichever version of To's chain matches its version
@@ -207,12 +272,13 @@ template<configuration_c T>
 /// \param subtree The section's subtree.
 /// \param version The version the subtree declares.
 /// \param reject_unknown_fields Whether a field the type does not declare is an error.
-/// \return The configuration, parsed as the matching version and migrated to To.
+/// \return The configuration, parsed as the matching version and migrated to
+///         To, and the keys the matching version owns in the subtree.
 /// \throws arude::exception If no version in the chain matches.
 ///
 template<configuration_c To, configuration_c Candidate>
 [[nodiscard]] auto parse_section_chain(const rfl::Generic& subtree, version_t version, bool reject_unknown_fields)
-  -> To;
+  -> parsed_section<To>;
 
 ///
 ///
@@ -286,6 +352,17 @@ auto read_generic(const rfl::Generic& generic, const bool reject_unknown_fields)
 
 ///
 ///
+template<configuration_c T>
+auto keys_of(const T& val) -> key_set_t
+{
+  // A configuration is an aggregate, so its generic form is always a table.
+  const auto fields = rfl::to_generic(val).to_object().value();
+
+  return fields | std::views::keys | std::ranges::to<key_set_t>();
+}
+
+///
+///
 inline auto section_present(const rfl::Generic::Object& document, const std::string_view section) -> bool
 {
   if(!section.empty())
@@ -306,6 +383,39 @@ inline auto section_present(const rfl::Generic::Object& document, const std::str
   return !std::ranges::all_of(
     document | std::views::values,
     [&is_table, &is_tables](const rfl::Generic& value) -> bool { return is_table(value) || is_tables(value); });
+}
+
+///
+///
+inline auto
+replace_owned(const rfl::Generic::Object& table, const rfl::Generic::Object& fields, const key_set_t& owned_keys)
+  -> rfl::Generic::Object
+{
+  auto replaced = rfl::Generic::Object{};
+
+  // Rebuilt rather than edited: rfl::Object has no erase. Walking the table
+  // in its own order keeps every key that stays where it was.
+  for(const auto& [key, value] : table)
+  {
+    if(const auto field = fields.get(key); field.has_value())
+    {
+      replaced.insert(key, field.value());
+    }
+    else if(!owned_keys.contains(key))
+    {
+      replaced.insert(key, value);
+    }
+  }
+
+  for(const auto& [key, value] : fields)
+  {
+    if(!table.get(key).has_value())
+    {
+      replaced.insert(key, value);
+    }
+  }
+
+  return replaced;
 }
 
 ///
@@ -334,7 +444,7 @@ auto parse_section(
   const rfl::Generic::Object& document,
   const std::string_view section,
   const load_policy policy,
-  const bool reject_unknown_fields) -> T
+  const bool reject_unknown_fields) -> parsed_section<T>
 {
   const auto source = section.empty() ? std::string_view{"the document"} : section;
 
@@ -357,7 +467,10 @@ auto parse_section(
   {
     try
     {
-      return read_generic<T>(subtree, reject_unknown_fields);
+      auto value = read_generic<T>(subtree, reject_unknown_fields);
+      auto owned_keys = keys_of(value);
+
+      return parsed_section<T>{.value = std::move(value), .owned_keys = std::move(owned_keys)};
     }
     catch(...)
     {
@@ -393,11 +506,17 @@ auto parse_section(
 // time; the else branch below is where it stops.
 // NOLINTNEXTLINE(misc-no-recursion)
 template<configuration_c To, configuration_c Candidate>
-auto parse_section_chain(const rfl::Generic& subtree, const version_t version, const bool reject_unknown_fields) -> To
+auto parse_section_chain(const rfl::Generic& subtree, const version_t version, const bool reject_unknown_fields)
+  -> parsed_section<To>
 {
   if(version == version_of<Candidate>())
   {
-    return migrate<To>(read_generic<Candidate>(subtree, reject_unknown_fields));
+    const auto found = read_generic<Candidate>(subtree, reject_unknown_fields);
+
+    // The keys are those of the version found, not of To: they are what is in
+    // the source, and a key that the migration renames or drops has to be
+    // among them for a store to take it out.
+    return parsed_section<To>{.value = migrate<To>(found), .owned_keys = keys_of(found)};
   }
 
   if constexpr(has_previous_configuration_c<Candidate>)
@@ -414,7 +533,8 @@ auto parse_section_chain(const rfl::Generic& subtree, const version_t version, c
 ///
 ///
 template<configuration_c T>
-auto write_section_value(rfl::Generic::Object& document, const std::string_view section, const T& val) -> void
+auto write_section_value(
+  rfl::Generic::Object& document, const std::string_view section, const T& val, const key_set_t& owned_keys) -> void
 {
   auto stamped = val;
   stamped.version = version_of<T>();
@@ -424,29 +544,17 @@ auto write_section_value(rfl::Generic::Object& document, const std::string_view 
 
   if(section.empty())
   {
-    for(const auto& [key, value] : fields)
-    {
-      document[key] = value;
-    }
+    document = replace_owned(document, fields, owned_keys);
 
     return;
   }
 
   auto& entry = document[std::string{section}];
 
-  auto table = entry.to_object();
+  // Anything under the name that is not a table is replaced by one.
+  const auto table = entry.to_object().value_or(rfl::Generic::Object{});
 
-  if(!table.has_value())
-  {
-    table = rfl::Generic::Object{};
-  }
-
-  for(const auto& [key, value] : fields)
-  {
-    table.value()[key] = value;
-  }
-
-  entry = rfl::Generic{std::move(table).value()};
+  entry = rfl::Generic{replace_owned(table, fields, owned_keys)};
 }
 
 } // namespace arude::config::detail

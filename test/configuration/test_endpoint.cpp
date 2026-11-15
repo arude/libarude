@@ -215,7 +215,7 @@ template<arude::config::configuration_c T>
 auto marker_endpoint::read_section(
   const document_t& document, const std::string_view section, const arude::config::load_policy policy) const -> T
 {
-  return arude::config::detail::parse_section<T>(document, section, policy, false);
+  return arude::config::detail::parse_section<T>(document, section, policy, false).value;
 }
 
 ///

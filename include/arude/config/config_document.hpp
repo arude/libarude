@@ -24,6 +24,11 @@
 ///     defaults. A section added after a load cannot clobber a value already
 ///     in the file, which is what makes adding one after a load allowed.
 ///
+/// Owning goes down to the key. A section remembers which keys it read out of
+/// its table, and a store replaces exactly those: a key its value no longer
+/// produces — a std::optional that was reset, a field a migration renamed —
+/// leaves the source, and a key its type never declared stays where it is.
+///
 /// load() never writes, on any policy. load_policy::create is a decision about
 /// the cache alone: a source that is not there, or a section that is not in
 /// it, leaves the section at its defaults, and it reaches the source when the
@@ -124,17 +129,17 @@ public:
   /// a get(), and two loads under way at once each hold steps of their own
   /// rather than sharing a place to put a half-finished result.
   ///
-  /// A section that is not in the document takes its type's defaults where
-  /// the policy carries load_policy::create. That is also what a source that
-  /// is not there comes to: it is handed in as an empty document, which no
-  /// section is in.
+  /// A section that is not in the document takes its type's defaults, owning
+  /// no key, where the policy carries load_policy::create. That is also what
+  /// a source that is not there comes to: it is handed in as an empty
+  /// document, which no section is in.
   ///
   /// \param document The parsed document. For the root section the document
   ///                  has every registered subsection already stripped.
   /// \param policy What to do about a missing or differently versioned section.
-  /// \return The step that installs the value read. The document calls it
-  ///         under its exclusive lock, at most once, and keeps the section
-  ///         alive until it has.
+  /// \return The step that installs the value read and the keys the section
+  ///         owns in the source. The document calls it under its exclusive
+  ///         lock, at most once, and keeps the section alive until it has.
   /// \throws exception_t With not_found if the section is not in the document
   ///                     and the policy does not create it, and with
   ///                     invalid_payload or invalid_version if it is there
@@ -146,7 +151,13 @@ public:
   ///
   /// Writes the section's value into a document.
   /// A no-op while the section is disengaged: its subtree is left exactly as
-  /// parsed, never written from defaults.
+  /// parsed, never written from defaults. Otherwise the keys the section owns
+  /// in its table are replaced by the fields of its value, and every other
+  /// key in that table is left alone.
+  ///
+  /// Const, and it has to stay so: the keys a section owns describe the tree
+  /// as last loaded, which is the tree every store() starts from, so writing
+  /// must not move them on.
   ///
   /// \param document The document to write into.
   ///
@@ -203,6 +214,8 @@ public:
 
   ///
   /// Stores the document with one write of the whole document.
+  /// What is written is the source as last loaded, with what each engaged
+  /// section owns in it replaced by that section's value.
   ///
   virtual auto store() -> void = 0;
 
@@ -251,7 +264,7 @@ public:
 /// A document bound to one endpoint instance and one transport instance.
 /// format_ and carrier_ are moved in at construction and only ever used
 /// const, so the mutex guards the rest alone: the list of sections, each
-/// section's value, the retained tree, and the load numbers.
+/// section's value and owned keys, the retained tree, and the load numbers.
 ///
 /// \tparam E Endpoint type.
 /// \tparam Tr Transport type.
@@ -362,6 +375,10 @@ private: // Variables
 /// The value is a std::optional<T>: disengaged means never loaded, never set,
 /// which is what write_into reads to leave the subtree exactly as parsed.
 ///
+/// Beside the value it holds the keys it owns in the source, which are the
+/// ones the last load found the section to consist of. They are what a store
+/// replaces, and they are empty until a load has read the section.
+///
 /// \tparam T Configuration type.
 ///
 template<configuration_c T>
@@ -414,6 +431,10 @@ public: // Accessors
 
   ///
   /// Replaces the cached value. The caller holds the document's lock.
+  /// The owned keys stay as they are, as they describe the source and not the
+  /// cache. For a section that was never loaded that means none: it has read
+  /// nothing, so it owns nothing yet, and a store merges its fields over
+  /// whatever its table holds without removing a key.
   ///
   /// \param value Value to cache. Not retained.
   ///
@@ -422,6 +443,7 @@ public: // Accessors
 private: // Variables
   std::string name_;
   std::optional<T> value_;
+  key_set_t owned_keys_; // Guarded by the document's lock, like value_.
 };
 
 ///
@@ -453,8 +475,8 @@ template<configuration_c T>
 auto section<T>::prepare_load(const rfl::Generic::Object& document, const load_policy policy) -> std::function<void()>
 {
   // Value-initialised is what a section that is not there takes when it is
-  // created: the type's defaults.
-  auto result = T{};
+  // created: the type's defaults, and no key owned, as none was read.
+  auto result = parsed_section<T>{};
 
   if(detail::section_present(document, name_))
   {
@@ -471,7 +493,11 @@ auto section<T>::prepare_load(const rfl::Generic::Object& document, const load_p
   // What was read lives in the closure and nowhere else until the document
   // runs it, so a load that is abandoned leaves no trace here, and two loads
   // cannot see each other's results. Moved out on the one call there is.
-  return [this, result = std::move(result)] mutable -> void { value_ = std::move(result); };
+  return [this, result = std::move(result)] mutable -> void
+  {
+    value_ = std::move(result.value);
+    owned_keys_ = std::move(result.owned_keys);
+  };
 }
 
 ///
@@ -484,7 +510,12 @@ auto section<T>::write_into(rfl::Generic::Object& document) const -> void
     return;
   }
 
-  detail::write_section_value<T>(document, name_, value_.value());
+  // owned_keys_ is read here and never brought up to date with what is
+  // written. Every store() starts again from the tree as last loaded, and the
+  // owned keys say what the section holds in that tree. Moved on to the keys
+  // just written, they would no longer name a key that the loaded tree holds
+  // and the value has since dropped, and the next store() would put it back.
+  detail::write_section_value<T>(document, name_, value_.value(), owned_keys_);
 }
 
 ///
@@ -612,16 +643,16 @@ auto document<E, Tr>::load(const load_policy policy) -> void
   }
 
   // The lock is taken once, and only to swap the finished results in: the
-  // tree and every section's value change together, so they always describe
-  // one and the same read.
+  // tree and every section's value and owned keys change together, so they
+  // always describe one and the same read.
   const auto lock = std::scoped_lock{mutex_};
 
   // A load that started later has installed its read already. Installing
   // this one over it would leave a section attached in between with the
-  // later read's value beside this read's tree, and a store would then write
-  // the one over the other. Loads are numbered in the order they took their
-  // sections, so the later one holds every section this one does, and its
-  // read stands for all of them.
+  // later read's value and owned keys beside this read's tree, and a store
+  // would then write the one over the other. Loads are numbered in the order
+  // they took their sections, so the later one holds every section this one
+  // does, and its read stands for all of them.
   if(load_installed_ > number)
   {
     return;
@@ -650,6 +681,10 @@ auto document<E, Tr>::store() -> void
   rfl::Generic::Object output;
 
   {
+    // Shared is enough, as nothing the document holds changes: neither
+    // parsed_ nor a section's owned keys follow what is written. Together
+    // they describe the source as last loaded, and the next store() starts
+    // from that same tree again.
     const auto lock = std::shared_lock{mutex_};
 
     output = parsed_;

@@ -214,6 +214,60 @@ struct server_v2
 [[nodiscard]] constexpr auto downgrade(const server_v2& val) -> server_v1;
 
 ///
+/// A section with a field that may be absent, so a value can stop producing a
+/// key it was read with.
+///
+struct proxy
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the file.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// Host the proxy is reached at.
+  ///
+  std::string host = "proxy.invalid";
+
+  ///
+  /// Port to reach it on, where it is not the default one.
+  ///
+  std::optional<std::uint32_t> port;
+};
+
+///
+/// A root configuration with a field that may be absent: what proxy is to a
+/// named section, for the top level of the document.
+///
+struct labelled_app
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the file.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// Name this configuration is known by.
+  ///
+  std::string name = "example";
+
+  ///
+  /// Label shown beside the name, where there is one.
+  ///
+  std::optional<std::string> label;
+};
+
+///
 ///
 constexpr auto upgrade(const network_v1& val) -> network_v2
 {
@@ -1145,6 +1199,203 @@ SCENARIO("a root section missing from an existing source is created or reported"
   }
 }
 
+// A section owns the keys it was read from, and a store replaces exactly those.
+// So a key the value has stopped producing leaves the file with it.
+SCENARIO("a key a section no longer produces leaves the file", "[config][document]")
+{
+  GIVEN("a named section loaded with its optional field set")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_optional_reset.toml"};
+    test_helpers::write_text(
+      file.path(),
+      "version = 1\n"
+      "name = \"example\"\n"
+      "\n"
+      "[proxy]\n"
+      "version = 1\n"
+      "host = \"proxy.invalid\"\n"
+      "port = 3128\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+    auto proxy = document.add_section<document_test::proxy>("proxy");
+
+    document.load();
+    REQUIRE(proxy.get().port == 3128);
+
+    WHEN("the field is reset and the document stored")
+    {
+      auto updated = proxy.get();
+      updated.port.reset();
+      proxy.set(updated);
+      document.store();
+
+      THEN("the key is gone from the section's table, and the others are not")
+      {
+        const auto keys = document_test::keys_in(file.path(), "proxy");
+        REQUIRE(!keys.contains("port"));
+        REQUIRE(keys.contains("host"));
+        REQUIRE(keys.contains("version"));
+        REQUIRE(!document_test::text_of(file.path()).contains("3128"));
+      }
+
+      THEN("the field stays disengaged across a load")
+      {
+        document.load();
+        REQUIRE(!proxy.get().port.has_value());
+        REQUIRE(proxy.get().host == "proxy.invalid");
+      }
+
+      THEN("a second store does not bring the key back")
+      {
+        document.store();
+        REQUIRE(!document_test::keys_in(file.path(), "proxy").contains("port"));
+      }
+    }
+  }
+
+  GIVEN("a root section loaded with its optional field set, beside a table nobody registers")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_optional_reset_root.toml"};
+    test_helpers::write_text(
+      file.path(),
+      "version = 1\n"
+      "name = \"example\"\n"
+      "label = \"temporary\"\n"
+      "\n"
+      "[experimental]\n"
+      "flag = true\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::labelled_app>();
+
+    document.load();
+    REQUIRE(root.get().label == "temporary");
+
+    WHEN("the field is reset and the document stored")
+    {
+      auto updated = root.get();
+      updated.label.reset();
+      root.set(updated);
+      document.store();
+
+      THEN("the key is gone from the top level, and what the root does not own is not")
+      {
+        const auto keys = document_test::keys_in(file.path(), "");
+        REQUIRE(!keys.contains("label"));
+        REQUIRE(keys.contains("name"));
+        REQUIRE(keys.contains("version"));
+        REQUIRE(keys.contains("experimental"));
+      }
+
+      THEN("the field stays disengaged across a load")
+      {
+        document.load();
+        REQUIRE(!root.get().label.has_value());
+      }
+    }
+  }
+
+  GIVEN("a version 1 section whose field the current version renames")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_renamed_key.toml"};
+    test_helpers::write_text(
+      file.path(),
+      "version = 1\n"
+      "name = \"example\"\n"
+      "\n"
+      "[server]\n"
+      "version = 1\n"
+      "host = \"old-host\"\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+    auto server = document.add_section<document_test::server_v2>("server");
+
+    WHEN("it is loaded as the current version and stored")
+    {
+      document.load();
+      REQUIRE(server.get().hostname == "old-host");
+
+      document.store();
+
+      THEN("the table holds the new key and not the old one")
+      {
+        const auto keys = document_test::keys_in(file.path(), "server");
+        REQUIRE(keys.contains("hostname"));
+        REQUIRE(!keys.contains("host"));
+        REQUIRE(keys.contains("version"));
+      }
+
+      // The strict load alone passes whether or not the old key is still
+      // beside the new one, as a document ignores keys its types do not
+      // declare. What it cannot pass with is host surviving the store that
+      // follows it.
+      THEN("it reads back as the current version, and a store from that has no old key either")
+      {
+        document.load(arude::config::load_policy::strict_version);
+        REQUIRE(server.get().hostname == "old-host");
+
+        document.store();
+        REQUIRE(!document_test::keys_in(file.path(), "server").contains("host"));
+      }
+    }
+  }
+}
+
+// The other half of owning a key: one the section's type does not declare was
+// never read by it, so it is somebody else's and a store leaves it be.
+SCENARIO("a key a section's type does not declare survives a store", "[config][document]")
+{
+  GIVEN("a file whose network table holds a key the type knows nothing of")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_undeclared_key.toml"};
+    test_helpers::write_text(
+      file.path(),
+      "version = 1\n"
+      "name = \"example\"\n"
+      "\n"
+      "[network]\n"
+      "version = 2\n"
+      "host = \"original\"\n"
+      "port = 9443\n"
+      "comment = \"kept\"\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+    auto network = document.add_section<document_test::network_v2>("network");
+
+    WHEN("the section is loaded, changed and stored")
+    {
+      document.load();
+
+      auto updated = network.get();
+      updated.host = "renamed";
+      network.set(updated);
+      document.store();
+
+      THEN("the key is still in the table, beside the value that changed")
+      {
+        const auto keys = document_test::keys_in(file.path(), "network");
+        REQUIRE(keys.contains("comment"));
+
+        const auto text = document_test::text_of(file.path());
+        REQUIRE(text.contains("kept"));
+        REQUIRE(text.contains("renamed"));
+        REQUIRE(!text.contains("original"));
+      }
+    }
+  }
+}
+
 // The sections a load works through are the ones attached when it started.
 // One attached while the source is being read is not part of that load: it
 // stays disengaged, rather than failing the load for not being in a source
@@ -1195,9 +1446,9 @@ SCENARIO("a section attached while a load is under way is not part of that load"
 }
 
 // Of two loads under way at once, the one that started later wins, so the
-// tree a store starts from and the value every section holds come from one
-// read. Run on one thread: the transport starts the second load from inside
-// the first one's read, after taking the bytes that read returns.
+// tree a store starts from and the keys every section owns in it come from
+// one read. Run on one thread: the transport starts the second load from
+// inside the first one's read, after taking the bytes that read returns.
 SCENARIO("of two loads under way at once, the later one's read is the one that stands", "[config][document]")
 {
   GIVEN("a source whose renamed section is still at version 1, read by a load that a second load overtakes")

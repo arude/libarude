@@ -207,6 +207,9 @@ public: // Methods
   /// version member happens to hold, so a file cannot come out claiming to be
   /// a version it is not.
   ///
+  /// The value's fields are merged over whatever the section's table already
+  /// holds: a key the value does not produce is left in it.
+  ///
   /// \tparam T Configuration type.
   /// \param document The document to write into.
   /// \param section The section name, or empty for the root.
@@ -299,7 +302,7 @@ template<configuration_c T>
 auto endpoint_toml::read_section(
   const document_t& document, const std::string_view section, const load_policy policy) const -> T
 {
-  return detail::parse_section<T>(document, section, policy, options_.reject_unknown_fields);
+  return detail::parse_section<T>(document, section, policy, options_.reject_unknown_fields).value;
 }
 
 ///
@@ -328,7 +331,8 @@ auto from_toml(const std::string_view text) -> T
 {
   // load_policy::none, so a version other than T's is refused rather than
   // migrated: from_toml_migrated is what accepts an older one.
-  return detail::parse_section<T>(detail::read_toml_document(text, detail::text_source), {}, load_policy::none, false);
+  return detail::parse_section<T>(detail::read_toml_document(text, detail::text_source), {}, load_policy::none, false)
+    .value;
 }
 
 ///
@@ -337,7 +341,8 @@ template<configuration_c To>
 auto from_toml_migrated(const std::string_view text) -> To
 {
   return detail::parse_section<To>(
-    detail::read_toml_document(text, detail::text_source), {}, load_policy::upgrade_to_current, false);
+           detail::read_toml_document(text, detail::text_source), {}, load_policy::upgrade_to_current, false)
+    .value;
 }
 
 ///

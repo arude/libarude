@@ -92,6 +92,12 @@ public: // Accessors
   ///
   /// Replaces the cached value. The document is untouched until store().
   ///
+  /// A section that was loaded owns the keys it was read from, and store()
+  /// replaces them: a key the new value no longer produces, such as a
+  /// std::optional member that was reset, leaves the source. A section that
+  /// was never loaded has read nothing and so owns nothing yet: store() merges
+  /// its fields over its table, and removes no key from it.
+  ///
   /// \param value Value to cache. Not retained.
   ///
   auto set(const T& value) -> void;
