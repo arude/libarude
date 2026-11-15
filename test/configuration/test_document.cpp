@@ -8,6 +8,7 @@
 ///
 
 #include "arude/config.hpp"
+#include "arude/enum.hpp"
 #include "test/helpers/temp_file.hpp"
 #include "test/helpers/write_text.hpp"
 
@@ -16,8 +17,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 
 namespace document_test
@@ -420,6 +424,96 @@ SCENARIO("the create policy leaves the source alone", "[config][document]")
           REQUIRE(next_root.loaded());
           REQUIRE(next_root.get().version == arude::config::version_of<document_test::app>());
         }
+      }
+    }
+  }
+}
+
+// A load that caught a file part-way through being rewritten would find it
+// empty or cut short and fail, although the file was whole both before the
+// write and after it. transport_file replaces the file in one step, so no load
+// sees it empty or half-written.
+SCENARIO("a load overlapping a store of the same file reads one whole file", "[config][document]")
+{
+  GIVEN("a file stored by one document, and a second document over the same file")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_overlap.toml"};
+
+    auto writer_manager = arude::config::config_manager{};
+    auto writer =
+      writer_manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto writer_root = writer.add_root<document_test::app>();
+    writer_root.set(document_test::app{.name = "stored"});
+    writer.store();
+
+    auto reader_manager = arude::config::config_manager{};
+    auto reader =
+      reader_manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto reader_root = reader.add_root<document_test::app>();
+
+    WHEN("one thread stores it over and over while another loads it with the create policy")
+    {
+      static constexpr auto rounds = 300;
+
+      using arude::bitwise_operators::operator|;
+
+      auto loads_at_defaults = 0;
+      auto loads_failed = 0;
+      auto stores_refused = 0; // Written by the storing thread alone, and read once it has joined.
+
+      {
+        // A store that fails is tolerated: on Windows, replacing a file that
+        // a reader has open at that moment can be refused. What this test is
+        // about is what the reader finds.
+        auto storing = std::jthread{
+          [&writer, &stores_refused] -> void
+          {
+            for(auto round = 0; round < rounds; ++round)
+            {
+              try
+              {
+                writer.store();
+              }
+              catch(const arude::config::exception_t&)
+              {
+                ++stores_refused;
+              }
+            }
+          }};
+
+        for(auto round = 0; round < rounds; ++round)
+        {
+          try
+          {
+            reader.load(arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current);
+
+            if(reader_root.get().name != "stored")
+            {
+              ++loads_at_defaults;
+            }
+          }
+          catch(const arude::config::exception_t&)
+          {
+            ++loads_failed;
+          }
+        }
+      }
+
+      THEN("no load fell back to defaults, and none failed")
+      {
+        REQUIRE(stores_refused < rounds);
+        REQUIRE(loads_at_defaults == 0);
+        REQUIRE(loads_failed == 0);
+      }
+
+      THEN("no temporary file was left beside it")
+      {
+        const auto siblings = std::ranges::distance(
+          std::filesystem::directory_iterator{file.path().parent_path()} |
+          std::views::filter(
+            [&file](const std::filesystem::directory_entry& entry) -> bool
+            { return entry.path().filename().string().contains(file.path().filename().string()); }));
+        REQUIRE(siblings == 1);
       }
     }
   }

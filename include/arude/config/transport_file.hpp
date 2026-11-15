@@ -13,14 +13,17 @@
 #include "arude/exception.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <ios>
 #include <iterator>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace arude::config::detail
@@ -39,11 +42,34 @@ namespace arude::config::detail
 [[nodiscard]] auto read_file(const std::filesystem::path& path) -> std::vector<std::byte>;
 
 ///
-/// Writes bytes to a file, replacing whatever was there.
+/// Returns a path beside a file for a write to go to before it replaces the file.
+/// In the same directory, so that the rename which follows stays on one
+/// filesystem and is atomic; a random name, so that two writers, in this
+/// process or in another, do not pick the same one.
+///
+/// \param path File the write is for.
+/// \return The temporary path. Nothing is created there.
+///
+[[nodiscard]] auto temporary_sibling(const std::filesystem::path& path) -> std::filesystem::path;
+
+///
+/// Writes bytes to a file, replacing whatever was there in one step.
+/// The bytes go to a temporary file beside it, which is then renamed over it,
+/// so a reader finds either the old contents or the new, never a file that is
+/// empty or part-way through being written. A symbolic link is followed: the
+/// file it names is replaced, and the link stays.
+///
+/// The replacement is a new file. It takes the old file's permissions, but
+/// not its owner, and a hard link to the old file keeps the old contents. On
+/// Windows the rename can fail, and the write with it, while another handle
+/// has the file open without sharing its deletion, which a std::ifstream
+/// reading it at that moment may well be.
 ///
 /// \param path File to write.
 /// \param bytes Bytes to write. Not retained.
-/// \throws exception_t With io_error if the file cannot be opened or cannot be written.
+/// \throws exception_t With io_error if the file cannot be opened, written or
+///                     replaced. The file is unchanged then, and no
+///                     temporary file is left behind.
 ///
 auto write_file(const std::filesystem::path& path, std::span<const std::byte> bytes) -> void;
 
@@ -71,23 +97,93 @@ inline auto read_file(const std::filesystem::path& path) -> std::vector<std::byt
 
 ///
 ///
+inline auto temporary_sibling(const std::filesystem::path& path) -> std::filesystem::path
+{
+  auto entropy = std::random_device{};
+  const auto tag = (std::uint64_t{entropy()} << 32U) | std::uint64_t{entropy()};
+
+  // Built by appending to a path rather than formatted as a string, so a
+  // file name that is not representable in the narrow encoding survives.
+  auto name = std::filesystem::path{"."};
+  name += path.filename();
+  name += std::format(".{:016x}.tmp", tag);
+
+  return path.parent_path() / name;
+}
+
+///
+///
 inline auto write_file(const std::filesystem::path& path, const std::span<const std::byte> bytes) -> void
 {
-  auto stream = std::ofstream{path, std::ios::binary | std::ios::trunc};
+  auto target = path;
 
-  if(!stream.is_open())
+  // Renaming over a link would replace the link itself with a regular file.
+  // Where the path cannot even be looked at, it is taken as it is, and the
+  // open below reports the failure.
+  auto unexamined = std::error_code{};
+
+  if(std::filesystem::is_symlink(std::filesystem::symlink_status(path, unexamined)))
   {
-    throw exception_t{
-      std::format("arude::config: cannot open '{}' for writing.", path.string()), config_error::io_error};
+    auto error = std::error_code{};
+    target = std::filesystem::weakly_canonical(path, error);
+
+    if(error)
+    {
+      throw exception_t{
+        std::format("arude::config: cannot resolve the link '{}': {}", path.string(), error.message()),
+        config_error::io_error};
+    }
   }
 
-  const auto text = as_text(bytes);
-  stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-  stream.close();
+  const auto temporary = temporary_sibling(target);
 
-  if(stream.fail())
+  try
   {
-    throw exception_t{std::format("arude::config: failed while writing '{}'.", path.string()), config_error::io_error};
+    auto stream = std::ofstream{temporary, std::ios::binary | std::ios::trunc};
+
+    if(!stream.is_open())
+    {
+      throw exception_t{
+        std::format("arude::config: cannot open '{}' for writing.", temporary.string()), config_error::io_error};
+    }
+
+    // Before anything is written, so contents the old file kept private are
+    // not readable by others in the meantime. Best effort: where the old
+    // permissions cannot be read, or there is no old file, the new one keeps
+    // the defaults it was created with.
+    auto ignored = std::error_code{};
+    if(const auto previous = std::filesystem::status(target, ignored); std::filesystem::exists(previous))
+    {
+      std::filesystem::permissions(temporary, previous.permissions(), ignored);
+    }
+
+    const auto text = as_text(bytes);
+    stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+    stream.close();
+
+    if(stream.fail())
+    {
+      throw exception_t{
+        std::format("arude::config: failed while writing '{}'.", temporary.string()), config_error::io_error};
+    }
+
+    auto error = std::error_code{};
+    std::filesystem::rename(temporary, target, error);
+
+    if(error)
+    {
+      throw exception_t{
+        std::format("arude::config: cannot replace '{}': {}", target.string(), error.message()),
+        config_error::io_error};
+    }
+  }
+  catch(...)
+  {
+    // Whatever failed, the temporary file is not to be left lying beside
+    // the configuration. Nothing to report if it was never created.
+    auto ignored = std::error_code{};
+    std::filesystem::remove(temporary, ignored);
+    throw;
   }
 }
 
@@ -105,6 +201,11 @@ namespace arude::config
 /// Writing creates the directories leading to the file. An application whose
 /// configuration lives somewhere like ~/.config/example/app.toml would
 /// otherwise have to create them itself on every first run.
+///
+/// Writing replaces the file in one step, through a temporary file beside it,
+/// so a read that overlaps a write, in this process or another, finds the old
+/// contents or the new and never a torn file. See detail::write_file for what
+/// a replacement carries over.
 ///
 class transport_file final
 {
@@ -163,10 +264,11 @@ public: // Accessors
 
 public: // Methods
   ///
-  /// Writes bytes to the path, replacing whatever was there.
+  /// Writes bytes to the path, replacing whatever was there in one step.
   ///
   /// \param bytes Bytes to write. Not retained.
-  /// \throws exception_t With io_error if the write fails.
+  /// \throws exception_t With io_error if the write fails, which leaves the
+  ///                     file as it was.
   ///
   auto write(std::span<const std::byte> bytes) const -> void;
 

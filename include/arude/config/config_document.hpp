@@ -33,11 +33,14 @@
 ///
 /// Locking: one shared_mutex per document, not per section — sections cannot
 /// be locked independently when a write serializes them all together. The I/O
-/// and the parsing happen outside that lock, and the lock is taken
-/// only to swap the finished values in, or a slow fetch would block every
-/// get() on that document for the length of the request. There is no
-/// cross-process locking: two processes writing one document still race;
-/// within a process the document mutex suffices.
+/// and the parsing happen outside that lock, and the lock is taken only to
+/// swap the finished values in, or a slow fetch would block every get() on
+/// that document for the length of the request. The mutex guards the cache
+/// and nothing else: it is not held across I/O, so a read overlapping a write
+/// of the same source is the transport's to make safe, as transport_file does
+/// by replacing the file in one step. There is no cross-process locking
+/// either: two processes writing one document still race, and the last write
+/// wins.
 ///
 #pragma once
 
