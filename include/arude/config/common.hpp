@@ -59,6 +59,17 @@ enum class config_error : std::uint8_t
   already_registered_location,
 
   ///
+  /// A section cannot be added to a document, as its name is taken there.
+  /// Either a section of that name is attached already, which for an empty
+  /// name means a second root, or the name and the root section's own keys
+  /// collide at the top level of the document. Told apart from
+  /// already_registered_location because the document and its location are
+  /// fine: what is taken is a name within that one document, so the call to
+  /// fix is the add_section() or add_root(), not the register_document().
+  ///
+  already_registered_section,
+
+  ///
   /// The source holds a version that cannot be brought to the one asked for.
   ///
   invalid_version,

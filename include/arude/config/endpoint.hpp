@@ -28,8 +28,11 @@
 
 #include <rfl/from_generic.hpp>
 #include <rfl/Generic.hpp>
+#include <rfl/named_tuple_t.hpp>
 #include <rfl/NoExtraFields.hpp>
+#include <rfl/NoOptionals.hpp>
 #include <rfl/to_generic.hpp>
+#include <rfl/Tuple.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -172,6 +175,29 @@ struct parsed_section
 ///
 template<configuration_c T>
 [[nodiscard]] auto keys_of(const T& val) -> key_set_t;
+
+///
+/// Reports whether reflect-cpp leaves a member out of everything it writes, as
+/// it does an rfl::Skip or rfl::SkipSerialization member, renamed or not. An
+/// rfl::SkipDeserialization member is written, so it is not left out.
+///
+/// \tparam T Type of the member, as rfl::named_tuple_t has it.
+/// \return Whether a member of that type is never written.
+///
+template<typename T>
+[[nodiscard]] consteval auto skipped_on_write() -> bool;
+
+///
+/// Returns every key a configuration of a type can serialise to, whatever its
+/// value: keys_of() for a value in which every std::optional member is engaged.
+/// Includes the version key. Leaves out a member that is never written, such
+/// as an rfl::Skip or rfl::SkipSerialization one.
+///
+/// \tparam T Configuration type.
+/// \return The keys.
+///
+template<configuration_c T>
+[[nodiscard]] auto declared_keys() -> key_set_t;
 
 ///
 /// Reports whether a section is in a document.
@@ -359,6 +385,64 @@ auto keys_of(const T& val) -> key_set_t
   const auto fields = rfl::to_generic(val).to_object().value();
 
   return fields | std::views::keys | std::ranges::to<key_set_t>();
+}
+
+///
+///
+template<typename T>
+consteval auto skipped_on_write() -> bool
+{
+  // The tests rfl::parsing::is_empty() makes before writing a member, made on
+  // the members rfl::Skip and rfl::Rename declare rather than on the traits in
+  // rfl::internal.
+  if constexpr(requires { T::skip_serialization_; })
+  {
+    return T::skip_serialization_;
+  }
+  else if constexpr(requires {
+                      typename T::Type;
+                      typename T::Name;
+                    })
+  {
+    return skipped_on_write<typename T::Type>();
+  }
+  else
+  {
+    return false;
+  }
+}
+
+///
+///
+template<configuration_c T>
+auto declared_keys() -> key_set_t
+{
+  // The same serialisation write_section_value() runs, so the keys are named
+  // as it names them, rfl::Rename and rfl::Flatten included. NoOptionals is
+  // what makes it name a std::optional member that the default value leaves
+  // disengaged: it writes such a member as a null rather than leaving it out.
+  const auto fields = rfl::to_generic<rfl::NoOptionals>(T{}).to_object().value();
+  auto keys = fields | std::views::keys | std::ranges::to<key_set_t>();
+
+  // NoOptionals writes a skipped member as a null too, which no write without
+  // it does. The named tuple has the members flattened and renamed as the
+  // serialisation has them, so its names are the ones to take out again.
+  using named_t = rfl::named_tuple_t<T>;
+
+  const auto drop = [&keys]<typename TField> -> void
+  {
+    if constexpr(skipped_on_write<typename TField::Type>())
+    {
+      keys.erase(std::string{TField::name()});
+    }
+  };
+
+  [&drop]<std::size_t... Index>(std::index_sequence<Index...>) -> void
+  {
+    (drop.template operator()<rfl::tuple_element_t<Index, typename named_t::Fields>>(), ...);
+  }(std::make_index_sequence<named_t::size()>{});
+
+  return keys;
 }
 
 ///

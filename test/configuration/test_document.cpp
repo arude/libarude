@@ -15,9 +15,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <rfl/Generic.hpp>
+#include <rfl/Skip.hpp>
 #include <rfl/toml/read.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -25,6 +27,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <latch>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -269,6 +272,43 @@ struct labelled_app
 };
 
 ///
+/// A root configuration with members reflect-cpp skips on a write, on a read,
+/// or on both, so its top-level keys are not simply its member names.
+///
+struct skipping_app
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the file.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// Name this configuration is known by.
+  ///
+  std::string name = "example";
+
+  ///
+  /// Neither written nor read.
+  ///
+  rfl::Skip<std::string> cache;
+
+  ///
+  /// Read, but never written.
+  ///
+  rfl::SkipSerialization<std::string> derived;
+
+  ///
+  /// Written, but never read.
+  ///
+  rfl::SkipDeserialization<std::string> computed;
+};
+
+///
 ///
 constexpr auto upgrade(const network_v1& val) -> network_v2
 {
@@ -423,6 +463,52 @@ auto transport_scripted::read() const -> std::vector<std::byte>
 auto transport_scripted::write(const std::span<const std::byte> bytes) const -> void
 {
   source_->text = arude::config::as_text(bytes);
+}
+
+///
+/// Requires a call to be refused as a section whose name is taken.
+///
+/// \param action The call. Not retained.
+/// \param mentions Texts the message must contain, such as the section's name
+///                 and the location.
+///
+auto require_refused(const std::function<void()>& action, const std::vector<std::string>& mentions) -> void
+{
+  try
+  {
+    action();
+    FAIL("the section should have been refused");
+  }
+  catch(const arude::config::exception_t& ex)
+  {
+    REQUIRE(ex.data() == arude::config::config_error::already_registered_section);
+
+    for(const auto& mention : mentions)
+    {
+      INFO(std::format("The message is: {}", ex.str()));
+      REQUIRE(ex.str().contains(mention));
+    }
+  }
+}
+
+///
+/// Requires a type to be registered nowhere in a manager's index.
+///
+/// \tparam T Configuration type.
+/// \param manager Manager whose index is looked in.
+///
+template<arude::config::configuration_c T>
+auto require_unregistered(const arude::config::config_manager& manager) -> void
+{
+  try
+  {
+    std::ignore = manager.find<T>();
+    FAIL("the type should not have been registered");
+  }
+  catch(const arude::config::exception_t& ex)
+  {
+    REQUIRE(ex.data() == arude::config::config_error::not_found);
+  }
 }
 
 } // namespace
@@ -1774,6 +1860,421 @@ SCENARIO("a store that fails below the transport is an io_error", "[config][docu
       THEN("it is catchable as an arude::exception_base")
       {
         REQUIRE_THROWS_AS(document.store(), arude::exception_base);
+      }
+    }
+  }
+}
+
+// A section's name is its key at the top level of the document, so two
+// sections under one name would both write the same table, and a second root
+// would write the same keys as the first.
+SCENARIO("a section under a name the document holds already is refused", "[config][document]")
+{
+  GIVEN("a document holding a root and a named section")
+  {
+    auto source = std::make_shared<document_test::scripted_source>();
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, document_test::transport_scripted{source});
+    auto root = document.add_root<document_test::app>();
+    auto network = document.add_section<document_test::network_v2>("network");
+
+    WHEN("a second section is added under the same name")
+    {
+      THEN("it is refused, naming the section and the location, whatever its type")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::logging>("network"); },
+          {"'network'", document.location()});
+
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::network_v2>("network"); },
+          {"'network'", document.location()});
+      }
+
+      // Registered twice, network_v2 would be an ambiguous_type here.
+      THEN("the refused section is not registered, and the first one is found")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::logging>("network"); }, {});
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::network_v2>("network"); }, {});
+
+        document_test::require_unregistered<document_test::logging>(manager);
+
+        network.set(document_test::network_v2{.host = "the first section"});
+        REQUIRE(manager.find<document_test::network_v2>().get().host == "the first section");
+      }
+    }
+
+    WHEN("a second root is added")
+    {
+      THEN("it is refused, naming the root and the location, whatever its type")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_root<document_test::labelled_app>(); },
+          {"the root section", document.location()});
+
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::labelled_app>(""); },
+          {"the root section", document.location()});
+      }
+
+      // Registered twice, the root's type would be an ambiguous_type here.
+      THEN("its type is registered once, for the first root, and found")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_root<document_test::app>(); }, {document.location()});
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_root<document_test::labelled_app>(); },
+          {document.location()});
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::labelled_app>(""); },
+          {document.location()});
+
+        root.set(document_test::app{.name = "the first root"});
+        REQUIRE(manager.find<document_test::app>().get().name == "the first root");
+        document_test::require_unregistered<document_test::labelled_app>(manager);
+      }
+    }
+  }
+}
+
+// The root's keys are the document's top level, where every named section's
+// name is a key too. A section named like a field of the root would be read
+// by the root as that field, and stripped from it as a subsection on a load.
+SCENARIO("a section named like a top-level key of the root is refused", "[config][document]")
+{
+  GIVEN("a document with a root whose type has a field that may be absent")
+  {
+    auto source = std::make_shared<document_test::scripted_source>();
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, document_test::transport_scripted{source});
+    std::ignore = document.add_root<document_test::labelled_app>();
+
+    WHEN("a section is added under the name of one of the root's fields")
+    {
+      THEN("it is refused, naming the section, the key, the root and the location")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::logging>("name"); },
+          {"section 'name'", "the root section", document.location()});
+
+        document_test::require_unregistered<document_test::logging>(manager);
+      }
+    }
+
+    WHEN("a section is added under the root's version key")
+    {
+      THEN("it is refused")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::logging>("version"); },
+          {"section 'version'", document.location()});
+      }
+    }
+
+    // The field is disengaged in the default value, so the root has not
+    // written it yet. It writes it once it is set, so it is the root's all
+    // the same.
+    WHEN("a section is added under the name of a field the root leaves out while it is disengaged")
+    {
+      THEN("it is refused")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::logging>("label"); },
+          {"section 'label'", document.location()});
+      }
+    }
+  }
+
+  GIVEN("a source holding a section named like a field of the root, and a document holding that section alone")
+  {
+    auto source = std::make_shared<document_test::scripted_source>();
+    source->text = "[name]\n"
+                   "version = 1\n"
+                   "level = \"debug\"\n";
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, document_test::transport_scripted{source});
+    auto name = document.add_section<document_test::logging>("name");
+
+    WHEN("the root is added after it")
+    {
+      THEN("the root is refused, naming the root, the key, the section and the location")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_root<document_test::app>(); },
+          {"the root section", "'name'", "section 'name'", document.location()});
+
+        document_test::require_unregistered<document_test::app>(manager);
+      }
+
+      // Attached, the root would make the load a not_found: the source has
+      // no root, and the load does not create one.
+      THEN("the document loads as one without a root")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_root<document_test::app>(); }, {});
+
+        document.load();
+        REQUIRE(name.get().level == "debug");
+      }
+    }
+  }
+
+  // Only what the root writes is its key. A member reflect-cpp skips on a
+  // write never reaches the document, so a section is free to take its name.
+  GIVEN("a document with a root whose type has members reflect-cpp skips")
+  {
+    auto source = std::make_shared<document_test::scripted_source>();
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, document_test::transport_scripted{source});
+    auto root = document.add_root<document_test::skipping_app>();
+
+    WHEN("sections are added under the names of the members that are never written")
+    {
+      auto cache = document.add_section<document_test::logging>("cache");
+      auto derived = document.add_section<document_test::network_v2>("derived");
+
+      THEN("they are accepted, and stored and loaded beside the root")
+      {
+        root.set(document_test::skipping_app{.name = "stored"});
+        cache.set(document_test::logging{.level = "debug"});
+        derived.set(document_test::network_v2{.host = "derived.invalid"});
+        document.store();
+
+        document.load();
+        REQUIRE(root.get().name == "stored");
+        REQUIRE(cache.get().level == "debug");
+        REQUIRE(derived.get().host == "derived.invalid");
+      }
+    }
+
+    WHEN("a section is added under the name of the member that is written, although never read")
+    {
+      THEN("it is refused")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::logging>("computed"); },
+          {"section 'computed'", "the root section", document.location()});
+
+        document_test::require_unregistered<document_test::logging>(manager);
+      }
+    }
+  }
+}
+
+SCENARIO("a refused section leaves the document as it was", "[config][document]")
+{
+  GIVEN("two documents over the same text, one of them asked for three sections it refuses")
+  {
+    static constexpr auto text = std::string_view{"version = 1\n"
+                                                  "name = \"from the source\"\n"
+                                                  "\n"
+                                                  "[network]\n"
+                                                  "version = 2\n"
+                                                  "host = \"original\"\n"
+                                                  "port = 9443\n"};
+
+    auto refused_source = std::make_shared<document_test::scripted_source>();
+    refused_source->text = std::string{text};
+    auto refused_manager = arude::config::config_manager{};
+    auto refused_document = refused_manager.register_document(
+      arude::config::endpoint_toml{}, document_test::transport_scripted{refused_source});
+    auto refused_root = refused_document.add_root<document_test::app>();
+    auto refused_network = refused_document.add_section<document_test::network_v2>("network");
+
+    document_test::require_refused(
+      [&refused_document] -> void { std::ignore = refused_document.add_section<document_test::logging>("network"); },
+      {});
+    document_test::require_refused(
+      [&refused_document] -> void { std::ignore = refused_document.add_section<document_test::logging>("name"); }, {});
+    document_test::require_refused(
+      [&refused_document] -> void { std::ignore = refused_document.add_root<document_test::labelled_app>(); }, {});
+
+    auto plain_source = std::make_shared<document_test::scripted_source>();
+    plain_source->text = std::string{text};
+    auto plain_manager = arude::config::config_manager{};
+    auto plain_document =
+      plain_manager.register_document(arude::config::endpoint_toml{}, document_test::transport_scripted{plain_source});
+    auto plain_root = plain_document.add_root<document_test::app>();
+    auto plain_network = plain_document.add_section<document_test::network_v2>("network");
+
+    WHEN("both are loaded")
+    {
+      refused_document.load();
+      plain_document.load();
+
+      THEN("the root keeps the field a refused section was named like")
+      {
+        REQUIRE(refused_root.get().name == "from the source");
+        REQUIRE(refused_network.get().host == "original");
+      }
+
+      THEN("a store of each, after the same change, writes the same text")
+      {
+        refused_root.set(document_test::app{.name = "renamed"});
+        plain_root.set(document_test::app{.name = "renamed"});
+
+        auto network_value = refused_network.get();
+        network_value.host = "changed";
+        refused_network.set(network_value);
+        plain_network.set(network_value);
+
+        refused_document.store();
+        plain_document.store();
+
+        REQUIRE(refused_source->text == plain_source->text);
+        REQUIRE(!refused_source->text.value().contains("level"));
+      }
+
+      THEN("the refused types are registered nowhere, and the accepted ones once")
+      {
+        document_test::require_unregistered<document_test::logging>(refused_manager);
+        document_test::require_unregistered<document_test::labelled_app>(refused_manager);
+        REQUIRE(refused_manager.find<document_test::app>().get().name == "from the source");
+        REQUIRE(refused_manager.find<document_test::network_v2>().get().host == "original");
+      }
+    }
+  }
+}
+
+SCENARIO("sections under distinct names are still accepted", "[config][document]")
+{
+  GIVEN("a document holding a root and a named section, loaded")
+  {
+    auto source = std::make_shared<document_test::scripted_source>();
+    source->text = "version = 1\n"
+                   "name = \"from the source\"\n"
+                   "\n"
+                   "[network]\n"
+                   "version = 2\n"
+                   "host = \"original\"\n"
+                   "port = 9443\n"
+                   "\n"
+                   "[logging]\n"
+                   "version = 1\n"
+                   "level = \"debug\"\n";
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, document_test::transport_scripted{source});
+    auto root = document.add_root<document_test::app>();
+    std::ignore = document.add_section<document_test::network_v2>("network");
+
+    document.load();
+
+    WHEN("a section under a name of its own is added after the load")
+    {
+      auto logging = document.add_section<document_test::logging>("logging");
+
+      THEN("it is accepted, and the next load fills it")
+      {
+        REQUIRE(!logging.loaded());
+
+        document.load();
+        REQUIRE(logging.get().level == "debug");
+      }
+
+      THEN("a name the root holds is refused after a load as well")
+      {
+        document_test::require_refused(
+          [&document] -> void { std::ignore = document.add_section<document_test::proxy>("name"); },
+          {"section 'name'"});
+      }
+    }
+
+    // Only the top level is shared: a named section's fields are keys of its
+    // own table, where no other section writes.
+    WHEN("a section is named like a field of a named section")
+    {
+      auto host = document.add_section<document_test::logging>("host");
+
+      THEN("it is accepted")
+      {
+        REQUIRE(!host.loaded());
+      }
+    }
+  }
+
+  GIVEN("two documents")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_distinct.toml"};
+    auto manager = arude::config::config_manager{};
+    auto first = manager.register_document(
+      arude::config::endpoint_toml{},
+      document_test::transport_scripted{std::make_shared<document_test::scripted_source>()});
+    auto second = manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+
+    WHEN("each is given a root and a section under the same name")
+    {
+      std::ignore = first.add_root<document_test::app>();
+      std::ignore = first.add_section<document_test::logging>("logging");
+
+      THEN("the other document accepts them, as a name is taken within one document only")
+      {
+        std::ignore = second.add_root<document_test::labelled_app>();
+        std::ignore = second.add_section<document_test::network_v2>("logging");
+      }
+    }
+  }
+}
+
+// The name is checked and the section attached in one step, so a name that is
+// free when two threads ask for it is given to one of them.
+SCENARIO("of sections added under one name at once, one is accepted", "[config][document]")
+{
+  GIVEN("a document, and threads that all add a section under the same name")
+  {
+    static constexpr auto threads = std::size_t{8};
+
+    auto manager = arude::config::config_manager{};
+    auto document = manager.register_document(
+      arude::config::endpoint_toml{},
+      document_test::transport_scripted{std::make_shared<document_test::scripted_source>()});
+
+    auto start = std::latch{static_cast<std::ptrdiff_t>(threads)};
+    auto accepted = std::atomic<std::size_t>{0};
+    auto refused = std::atomic<std::size_t>{0};
+
+    WHEN("they run")
+    {
+      {
+        auto workers = std::vector<std::jthread>{};
+        workers.reserve(threads);
+
+        for(auto i = std::size_t{0}; i < threads; ++i)
+        {
+          workers.emplace_back(
+            [&document, &start, &accepted, &refused] -> void
+            {
+              start.arrive_and_wait();
+
+              try
+              {
+                std::ignore = document.add_section<document_test::logging>("shared");
+                ++accepted;
+              }
+              catch(const arude::config::exception_t& ex)
+              {
+                if(ex.data() == arude::config::config_error::already_registered_section)
+                {
+                  ++refused;
+                }
+              }
+            });
+        }
+      }
+
+      THEN("one is accepted, every other one refused, and the type is registered once")
+      {
+        REQUIRE(accepted.load() == 1);
+        REQUIRE(refused.load() == threads - 1);
+        REQUIRE(!manager.find<document_test::logging>().loaded());
       }
     }
   }

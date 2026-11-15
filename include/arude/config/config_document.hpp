@@ -32,6 +32,11 @@
 /// produces — a std::optional that was reset, a field a migration renamed —
 /// leaves the source, and a key its type never declared stays where it is.
 ///
+/// Owning a key needs exactly one owner for it. A named section's key is its
+/// name, and the root's keys are its fields, all at the same top level: so a
+/// document refuses a second section under a name it holds, a second root, and
+/// a section named like a field of the root, at the point it is added.
+///
 /// load() never writes, on any policy. load_policy::create is a decision about
 /// the cache alone: a source that is not there, or a section that is not in
 /// it, leaves the section at its defaults, and it reaches the source when the
@@ -71,9 +76,11 @@
 
 #include <rfl/Generic.hpp>
 
+#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <flat_map>
 #include <flat_set>
 #include <format>
 #include <functional>
@@ -123,6 +130,16 @@ public:
   /// \return The name.
   ///
   [[nodiscard]] virtual auto name() const -> std::string_view = 0;
+
+  ///
+  /// Returns the keys of the document's top level that the section writes.
+  /// For a named section that is its name alone. For the root section it is
+  /// every key its type can write, declared_keys() of the type, whether or
+  /// not a value of it is cached. Computed afresh on every call.
+  ///
+  /// \return The keys.
+  ///
+  [[nodiscard]] virtual auto top_level_keys() const -> key_set_t = 0;
 
   ///
   /// Prepares a load of the section, and changes nothing yet.
@@ -268,7 +285,16 @@ public:
   /// Attaches a section. Its value stays disengaged until it is set, or until
   /// a load() that starts after this call has finished.
   ///
-  /// \param section The section to attach. Kept.
+  /// Refused where the section's name is taken in the document: where a
+  /// section of that name is attached already, or where a key in the
+  /// section's top_level_keys() is in those of one attached already. The
+  /// check and the attach are one step under the document's lock, so of two
+  /// sections attached under one name at once, only one gets through.
+  ///
+  /// \param section The section to attach. Kept, unless it is refused.
+  /// \throws exception_t With already_registered_section, naming the section
+  ///                     and the location, where the section is refused. The
+  ///                     document is then left as it was.
   ///
   virtual auto attach(std::shared_ptr<section_base> section) -> void = 0;
 
@@ -288,8 +314,9 @@ public:
 ///
 /// A document bound to one endpoint instance and one transport instance.
 /// format_ and carrier_ are moved in at construction and only ever used
-/// const, so the mutex guards the rest alone: the list of sections, each
-/// section's value and owned keys, the retained tree, and the load numbers.
+/// const, so the mutex guards the rest alone: the list of sections and the
+/// top-level keys they write, each section's value and owned keys, the
+/// retained tree, and the load numbers.
 ///
 /// \tparam E Endpoint type.
 /// \tparam Tr Transport type.
@@ -355,6 +382,7 @@ public: // Overrides
 
 private: // Typedefs
   using section_vec_t = std::vector<std::shared_ptr<section_base>>;
+  using key_owner_map_t = std::flat_map<std::string, std::string>; // Top-level key to the name of its section.
 
 private: // Helpers
   ///
@@ -428,6 +456,7 @@ private: // Variables
   std::uint64_t loads_begun_ = 0;    // Numbers every load in the order begin_load() was called.
   std::uint64_t load_installed_ = 0; // The number of the load whose read the cache holds.
   section_vec_t sections_;
+  key_owner_map_t key_owners_;            // The top_level_keys() of every section in sections_.
   std::weak_ptr<type_registry> registry_; // Weak, as the registry owns this document.
   mutable std::shared_mutex mutex_;
 };
@@ -472,6 +501,11 @@ public: // Overrides
   ///
   // NOLINTBEGIN(portability-template-virtual-member-function)
   [[nodiscard]] auto name() const -> std::string_view override;
+
+  ///
+  /// \see section_base::top_level_keys
+  ///
+  [[nodiscard]] auto top_level_keys() const -> key_set_t override;
 
   ///
   /// \see section_base::prepare_load
@@ -537,6 +571,19 @@ template<configuration_c T>
 auto section<T>::name() const -> std::string_view
 {
   return name_;
+}
+
+///
+///
+template<configuration_c T>
+auto section<T>::top_level_keys() const -> key_set_t
+{
+  if(name_.empty())
+  {
+    return detail::declared_keys<T>();
+  }
+
+  return key_set_t{name_};
 }
 
 ///
@@ -778,8 +825,53 @@ auto document<E, Tr>::mutex() const -> std::shared_mutex&
 template<endpoint_c E, transport_c Tr>
 auto document<E, Tr>::attach(std::shared_ptr<section_base> section) -> void
 {
+  // Taken before the lock: for the root section this serialises a value of
+  // its type, which has no business holding up a get().
+  const auto name = std::string{section->name()};
+  const auto keys = section->top_level_keys();
+
+  // The checks and the attach are under one lock, so that no section can be
+  // attached in between and take the name after it was found free.
   const auto lock = std::scoped_lock{mutex_};
+
+  if(std::ranges::any_of(
+       sections_, [&name](const std::shared_ptr<section_base>& attached) -> bool { return attached->name() == name; }))
+  {
+    throw exception_t{
+      std::format("arude::config: {} is already in the document at '{}'.", section_label(name), carrier_.location()),
+      config_error::already_registered_section};
+  }
+
+  // A named section's one key is its name, and the root's are its fields. So
+  // this is where a name and a field of the root collide, whichever of the two
+  // was added first: the root would read the table as one of its fields, and
+  // strip_subsection() would take its field away from it.
+  for(const auto& key : keys)
+  {
+    if(const auto owner = key_owners_.find(key); owner != key_owners_.end())
+    {
+      throw exception_t{
+        std::format(
+          "arude::config: {} cannot be added to the document at '{}', as the key '{}' there belongs to {}.",
+          section_label(name),
+          carrier_.location(),
+          key,
+          section_label(owner->second)),
+        config_error::already_registered_section};
+    }
+  }
+
+  // Built aside and swapped in, so that a failure to allocate leaves the
+  // document as it was: either both change or neither does.
+  auto owners = key_owners_;
+
+  for(const auto& key : keys)
+  {
+    owners.emplace(key, name);
+  }
+
   sections_.push_back(std::move(section));
+  key_owners_.swap(owners);
 }
 
 ///
@@ -966,11 +1058,20 @@ public: // Methods
   ///
   /// Adds a section for the root of the document, registering the type with
   /// the manager's index.
+  /// A document has one root, and the root's keys are the top level of the
+  /// document, which the names of its other sections are keys of as well: a
+  /// second root is refused, and so is a root with a field named like a
+  /// section attached already.
   ///
-  /// \see add_section for what happens where the manager is gone.
+  /// \see add_section for what happens where the manager is gone, and for
+  ///      what a refusal leaves behind.
   ///
   /// \tparam T Configuration type.
   /// \return The section handle.
+  /// \throws exception_t With already_registered_section if the document has
+  ///                     a root already, or if a key that T can write at the
+  ///                     top level, its version key included, is the name of
+  ///                     a section attached already.
   ///
   template<configuration_c T>
   [[nodiscard]] auto add_root() -> config_handle<T>;
@@ -981,6 +1082,16 @@ public: // Methods
   /// load is allowed: it stays disengaged, and so leaves its part of the
   /// source as it is on a store, until it is set or the next load() fills it.
   /// A load() already under way when the section is added does not fill it.
+  ///
+  /// The name is the section's key at the top level of the document, so it
+  /// has to be free there. It is refused where a section of that name is
+  /// attached already, which for an empty name means a root, and where it is
+  /// a key the root's type can write, whichever of the two is added first:
+  /// the root would read the section's table as a field of its own. A refused
+  /// section is neither attached nor registered, so the document, and every
+  /// load and store of it, behaves as though the call had not been made.
+  /// The check is atomic with the attach: of two sections added under one
+  /// name at once, one is refused.
   ///
   /// Where the source has no such section, a load() fails with not_found
   /// unless its policy carries load_policy::create, so an application that
@@ -993,6 +1104,8 @@ public: // Methods
   /// \tparam T Configuration type.
   /// \param name The section's name, which is also its key in the document.
   /// \return The section handle.
+  /// \throws exception_t With already_registered_section, naming the section
+  ///                     and the location, if the name is taken as above.
   ///
   template<configuration_c T>
   [[nodiscard]] auto add_section(std::string_view name) -> config_handle<T>;
@@ -1058,6 +1171,8 @@ auto config_document_handle::add_section(const std::string_view name) -> config_
 {
   auto section = std::make_shared<detail::section<T>>(name);
 
+  // Attached first, as attach() is what refuses a name that is taken, and
+  // registered only once it has gone through: a refused section is in neither.
   document_->attach(section);
   document_->register_type(type_key<T>(), section, document_);
 
