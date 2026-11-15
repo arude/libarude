@@ -57,11 +57,28 @@
 /// two loads under way at once the one that started later wins: the other
 /// installs nothing once it has, so the cache never holds a mix of two reads.
 /// A section attached while a load is under way is not part of that load and
-/// stays disengaged. The mutex guards the cache and nothing else: it is not
-/// held across I/O, so a read overlapping a write of the same source is the
-/// transport's to make safe, as transport_file does by replacing the file in
-/// one step. There is no cross-process locking either: two processes writing
-/// one document still race, and the last write wins.
+/// stays disengaged. The mutex guards the cache and nothing else, and is never
+/// held across I/O.
+///
+/// Stores are put in order by a second mutex per document, a std::mutex for
+/// I/O, which a store holds from before it takes its snapshot until its write
+/// has finished. Stores are therefore written in the order their snapshots
+/// were taken, and the one written last holds the newest values; a store that
+/// took its snapshot first cannot finish writing after a newer one. Only a
+/// store takes it, always before the cache lock and never under it, so a get()
+/// or a set() never waits for a write; another store does.
+///
+/// A load does not take the I/O mutex. Which read the cache holds is settled
+/// by the order loads started in, as above, so a load needs nothing from the
+/// order of stores, and making it wait would hold up whoever asked for it for
+/// as long as a slow store takes, a write over the network say. A load that
+/// overlaps a store reads the source as it was before that write or as it is
+/// after, whichever the transport hands it, and installs that read as a whole.
+/// So a read can overlap a write of the same source, and making that safe is
+/// the transport's job: transport_file does so by replacing the file in one
+/// step, and a transport that cannot has to serialise its own read and write.
+/// There is no cross-process locking either: two processes writing one
+/// document still race, and the last write wins.
 ///
 #pragma once
 
@@ -241,6 +258,12 @@ public:
   /// already in it is carried over rather than wiped; nothing the document
   /// holds is engaged or changed by that read.
   ///
+  /// Stores are written one at a time, in the order they took their
+  /// snapshots, so the one written last holds the newest values. A store
+  /// waits for another under way to finish writing first. get(), set() and
+  /// load() never wait for a store's write, only for the brief snapshot it
+  /// takes under the cache lock.
+  ///
   /// \throws exception_t With read_only if the transport cannot be written;
   ///                     with invalid_payload if the source has to be read
   ///                     first and does not parse, in which case it is left
@@ -314,9 +337,10 @@ public:
 ///
 /// A document bound to one endpoint instance and one transport instance.
 /// format_ and carrier_ are moved in at construction and only ever used
-/// const, so the mutex guards the rest alone: the list of sections and the
+/// const, so mutex_ guards the rest alone: the list of sections and the
 /// top-level keys they write, each section's value and owned keys, the
-/// retained tree, and the load numbers.
+/// retained tree, and the load numbers. io_mutex_ guards no data; it puts
+/// stores in order.
 ///
 /// \tparam E Endpoint type.
 /// \tparam Tr Transport type.
@@ -459,6 +483,7 @@ private: // Variables
   key_owner_map_t key_owners_;            // The top_level_keys() of every section in sections_.
   std::weak_ptr<type_registry> registry_; // Weak, as the registry owns this document.
   mutable std::shared_mutex mutex_;
+  std::mutex io_mutex_; // Held by store() from before its snapshot until its write has finished.
 };
 
 ///
@@ -757,6 +782,14 @@ auto document<E, Tr>::store() -> void
       std::format("arude::config: the transport at '{}' is read-only.", carrier_.location()), config_error::read_only};
   }
 
+  // Held from before the snapshot until the write is done, so stores are
+  // written in the order their snapshots were taken and the last one written
+  // holds the newest values. The read of a source not yet known is inside it
+  // too, so a store before any load() reads what the store before it wrote.
+  // Taken before the cache lock and never under it, and by no one but a
+  // store, so neither a get() nor a load() waits for this write.
+  const auto io_lock = std::scoped_lock{io_mutex_};
+
   auto unknown_source = read_unknown_source();
 
   rfl::Generic::Object output;
@@ -1034,6 +1067,12 @@ public: // Methods
   /// as it is, whether or not the document was loaded first. A document
   /// loaded carries over the source as that load read it; one never loaded
   /// reads the source again on every store.
+  ///
+  /// Stores of one document are written one at a time, each taking its values
+  /// once the one before it has finished writing, so the source is left with
+  /// the newest values. A store waits for another under way. get(), set() and
+  /// load() never wait for a store's write, only for the brief snapshot it
+  /// takes under the cache lock.
   ///
   /// \throws exception_t With read_only if the transport cannot be written;
   ///                     with invalid_payload if the document was never

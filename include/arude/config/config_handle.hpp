@@ -143,7 +143,8 @@ public: // Methods
   /// is in the source that no loaded or set section owns is carried over as
   /// it is, whether or not the document was loaded first. A document loaded
   /// carries over the source as that load read it; one never loaded reads the
-  /// source again on every store.
+  /// source again on every store. Stores of one document are written one at a
+  /// time, as config_document_handle::store() describes.
   ///
   /// \throws exception_t With read_only if the transport cannot be written;
   ///                     with invalid_payload if the document was never

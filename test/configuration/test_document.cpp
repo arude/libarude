@@ -20,12 +20,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iterator>
 #include <latch>
 #include <memory>
@@ -379,11 +381,18 @@ struct scripted_source
   /// starts reads without it.
   ///
   std::function<void()> on_read;
+
+  ///
+  /// A step to run inside the next write, before the bytes it was handed are
+  /// stored. Cleared before it runs, so it runs once, and a write that comes
+  /// after it stores its bytes without it.
+  ///
+  std::function<void()> on_write;
 };
 
 ///
-/// A transport holding its source in memory, whose reads can run a step of
-/// the test's, so a test can act in the middle of a load without a thread.
+/// A transport holding its source in memory, whose reads and writes can run a
+/// step of the test's, so a test can act in the middle of a load or a store.
 ///
 class transport_scripted final
 {
@@ -462,6 +471,11 @@ auto transport_scripted::read() const -> std::vector<std::byte>
 ///
 auto transport_scripted::write(const std::span<const std::byte> bytes) const -> void
 {
+  if(auto step = std::exchange(source_->on_write, nullptr))
+  {
+    step();
+  }
+
   source_->text = arude::config::as_text(bytes);
 }
 
@@ -1820,6 +1834,102 @@ SCENARIO("of two loads under way at once, the later one's read is the one that s
         REQUIRE(stored.get("name").value().to_string().value() == "second read");
         REQUIRE(table.get("hostname").has_value());
         REQUIRE(!table.get("host").has_value());
+      }
+    }
+  }
+}
+
+// Two stores under way at once are written in the order their snapshots were
+// taken, or the older snapshot could land last and lose the newer values
+// without a word. The transport holds the first store inside its write, with
+// its snapshot taken, until the test lets it go.
+SCENARIO("of two stores under way at once, the newer snapshot is written last", "[config][document]")
+{
+  GIVEN("a loaded document whose transport holds its next write until the test lets it go")
+  {
+    auto source = std::make_shared<document_test::scripted_source>();
+    source->text = "version = 1\n"
+                   "name = \"from the source\"\n";
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, document_test::transport_scripted{source});
+    auto root = document.add_root<document_test::app>();
+
+    document.load();
+
+    // Declared in this order so that a held write is let go on every way out
+    // of the scope, a failed REQUIRE included: release is destroyed before the
+    // futures, which wait for their threads, and a promise destroyed unset
+    // still wakes whoever waits on it.
+    auto held = std::promise<void>{}; // Set by the write once it is being held.
+    auto first = std::future<void>{};
+    auto second = std::future<void>{};
+    auto release = std::promise<void>{};
+
+    source->on_write = [&held, released = release.get_future().share()] -> void
+    {
+      held.set_value();
+      released.wait();
+    };
+
+    WHEN("one store is held in its write, and a second starts once a newer value is set")
+    {
+      root.set(document_test::app{.name = "older"});
+      first = std::async(std::launch::async, [&document] -> void { document.store(); });
+      held.get_future().wait();
+
+      // The held store holds no lock on the cache, so this does not wait.
+      root.set(document_test::app{.name = "newer"});
+      second = std::async(std::launch::async, [&document] -> void { document.store(); });
+
+      // Bounded, as a second store that waits for the first would otherwise
+      // never return here. Where stores are ordered the result does not depend
+      // on the bound: the second cannot finish before the first is let go,
+      // however long it is given.
+      const auto overtook = second.wait_for(std::chrono::milliseconds{200}) == std::future_status::ready;
+
+      release.set_value();
+      first.get();
+      second.get();
+
+      THEN("the second store did not finish while the first was held")
+      {
+        REQUIRE(!overtook);
+      }
+
+      THEN("the source holds the newer value")
+      {
+        const auto stored = rfl::toml::read<rfl::Generic>(source->text.value()).value().to_object().value();
+        REQUIRE(stored.get("name").value().to_string().value() == "newer");
+      }
+    }
+
+    WHEN("a store is held in its write, and the document is loaded meanwhile")
+    {
+      root.set(document_test::app{.name = "stored"});
+      first = std::async(std::launch::async, [&document] -> void { document.store(); });
+      held.get_future().wait();
+
+      second = std::async(std::launch::async, [&document] -> void { document.load(); });
+
+      // Generous, as the bound is how long a failure takes to show and not
+      // what a pass depends on: a load that does not wait for the store is
+      // done long before it runs out.
+      const auto loaded = second.wait_for(std::chrono::seconds{10}) == std::future_status::ready;
+
+      release.set_value();
+      first.get();
+      second.get();
+
+      THEN("the load finished while the store was still held")
+      {
+        REQUIRE(loaded);
+      }
+
+      THEN("it installed the source as it was before the held write, as one whole read")
+      {
+        REQUIRE(root.get().name == "from the source");
       }
     }
   }
