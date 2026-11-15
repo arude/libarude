@@ -1396,6 +1396,236 @@ SCENARIO("a key a section's type does not declare survives a store", "[config][d
   }
 }
 
+// A document that was never loaded has not looked at its source, and what it
+// has not looked at is not its to wipe: a store reads the source first.
+SCENARIO("a store with no load before it keeps what is in the source", "[config][document]")
+{
+  GIVEN("a file with a root, a logging table and a table nobody registers, and a document never loaded")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_store_unloaded.toml"};
+    test_helpers::write_text(
+      file.path(),
+      "version = 1\n"
+      "name = \"from the file\"\n"
+      "comment = \"kept\"\n"
+      "\n"
+      "[logging]\n"
+      "version = 1\n"
+      "level = \"debug\"\n"
+      "\n"
+      "[experimental]\n"
+      "flag = true\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+    auto network = document.add_section<document_test::network_v2>("network");
+    auto logging = document.add_section<document_test::logging>("logging");
+
+    WHEN("one section is set and the document stored")
+    {
+      auto network_value = document_test::network_v2{};
+      network_value.host = "example.invalid";
+
+      network.set(network_value);
+      document.store();
+
+      THEN("the set section is written")
+      {
+        const auto text = document_test::text_of(file.path());
+        REQUIRE(text.contains("[network]"));
+        REQUIRE(text.contains("example.invalid"));
+      }
+
+      THEN("the source's other keys and tables are kept")
+      {
+        const auto text = document_test::text_of(file.path());
+        REQUIRE(text.contains("from the file"));
+        REQUIRE(text.contains("comment"));
+        REQUIRE(text.contains("[logging]"));
+        REQUIRE(text.contains("debug"));
+        REQUIRE(text.contains("[experimental]"));
+        REQUIRE(text.contains("flag"));
+      }
+
+      THEN("reading the source for that engaged no section")
+      {
+        REQUIRE(!root.loaded());
+        REQUIRE(!logging.loaded());
+      }
+    }
+
+    WHEN("the root is set and the document stored")
+    {
+      root.set(document_test::app{.name = "renamed"});
+      document.store();
+
+      THEN("the root's fields are merged over the top level, which loses no key it did not write")
+      {
+        const auto keys = document_test::keys_in(file.path(), "");
+        REQUIRE(keys.contains("comment"));
+        REQUIRE(keys.contains("logging"));
+        REQUIRE(keys.contains("experimental"));
+
+        const auto text = document_test::text_of(file.path());
+        REQUIRE(text.contains("renamed"));
+        REQUIRE(!text.contains("from the file"));
+      }
+    }
+
+    // A store reads the source, but that is not a load: the next store has
+    // still not looked at what was added to the source since, and reads again.
+    WHEN("a section is stored, a table is added to the source, and the document is stored again")
+    {
+      network.set(document_test::network_v2{});
+      document.store();
+
+      test_helpers::write_text(file.path(), document_test::text_of(file.path()) + "\n[added]\nflag = true\n");
+      document.store();
+
+      THEN("the table added in between is kept, beside what was there first")
+      {
+        const auto keys = document_test::keys_in(file.path(), "");
+        REQUIRE(keys.contains("added"));
+        REQUIRE(keys.contains("experimental"));
+        REQUIRE(keys.contains("network"));
+      }
+    }
+
+    WHEN("a section is stored, and the source then stops parsing")
+    {
+      static constexpr auto garbage = std::string_view{"{ this is not toml"};
+
+      network.set(document_test::network_v2{});
+      document.store();
+
+      test_helpers::write_text(file.path(), garbage);
+
+      THEN("the next store is an invalid_payload as well, and leaves the source as it is")
+      {
+        try
+        {
+          document.store();
+          FAIL("storing over a source that does not parse should have thrown");
+        }
+        catch(const arude::config::exception_t& ex)
+        {
+          REQUIRE(ex.data() == arude::config::config_error::invalid_payload);
+        }
+
+        REQUIRE(document_test::text_of(file.path()) == garbage);
+      }
+    }
+  }
+
+  GIVEN("a file that is not valid TOML, and a document never loaded")
+  {
+    static constexpr auto garbage = std::string_view{"{ this is not toml"};
+
+    const auto file = test_helpers::temp_file{"arude_document_store_unparseable.toml"};
+    test_helpers::write_text(file.path(), garbage);
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+
+    WHEN("a section is set and the document stored")
+    {
+      root.set(document_test::app{.name = "would overwrite"});
+
+      THEN("the store is an invalid_payload rather than an overwrite")
+      {
+        try
+        {
+          document.store();
+          FAIL("storing over a source that does not parse should have thrown");
+        }
+        catch(const arude::config::exception_t& ex)
+        {
+          REQUIRE(ex.data() == arude::config::config_error::invalid_payload);
+        }
+
+        REQUIRE(document_test::text_of(file.path()) == garbage);
+      }
+    }
+
+    // A load cannot get past the source either, on any policy, so this is the
+    // one way to replace it through the library.
+    WHEN("the source is discarded, the root set and the document stored")
+    {
+      auto logging = document.add_section<document_test::logging>("logging");
+
+      document.discard_source();
+      root.set(document_test::app{.name = "replacement"});
+      document.store();
+
+      THEN("the source holds the root and nothing else, the section never set included")
+      {
+        const auto keys = document_test::keys_in(file.path(), "");
+        REQUIRE(keys == std::set<std::string, std::less<>>{"name", "version"});
+        REQUIRE(!logging.loaded());
+      }
+
+      THEN("the next start-up loads it")
+      {
+        auto next_manager = arude::config::config_manager{};
+        auto next_document =
+          next_manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+        auto next_root = next_document.add_root<document_test::app>();
+
+        next_document.load();
+
+        REQUIRE(next_root.get().name == "replacement");
+      }
+    }
+  }
+}
+
+// What a store starts from once the document has been loaded is the tree that
+// load read, so it writes over the source exactly what the sections own in it,
+// and a store does not go back to the source on its own.
+SCENARIO("a store after a load starts from the source as that load read it", "[config][document]")
+{
+  GIVEN("a document loaded from a file holding a root and a table nobody registers")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_store_loaded.toml"};
+    test_helpers::write_text(
+      file.path(),
+      "version = 1\n"
+      "name = \"from the file\"\n"
+      "\n"
+      "[experimental]\n"
+      "flag = true\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+
+    document.load();
+
+    WHEN("a table is added to the source after the load, and the document is stored")
+    {
+      test_helpers::write_text(file.path(), document_test::text_of(file.path()) + "\n[added]\nflag = true\n");
+      document.store();
+
+      THEN("what the load read is written back")
+      {
+        const auto keys = document_test::keys_in(file.path(), "");
+        REQUIRE(keys.contains("experimental"));
+        REQUIRE(keys.contains("name"));
+      }
+
+      THEN("the table added since is not, as the document never read it")
+      {
+        REQUIRE(!document_test::keys_in(file.path(), "").contains("added"));
+      }
+    }
+  }
+}
+
 // The sections a load works through are the ones attached when it started.
 // One attached while the source is being read is not part of that load: it
 // stays disengaged, rather than failing the load for not being in a source

@@ -18,7 +18,10 @@
 /// what you own:
 ///
 ///   - The parsed tree is retained, and store() starts from it, so a table
-///     nobody registered survives untouched.
+///     nobody registered survives untouched. Until the first load(), every
+///     store() reads the source first, for the same reason: what the document
+///     has not looked at is not its to wipe. discard_source() is the one way
+///     to say otherwise, for a source that does not parse.
 ///   - A section holds std::optional<T>. Disengaged — never loaded, never
 ///     set — means its subtree is left exactly as parsed, not written from
 ///     defaults. A section added after a load cannot clobber a value already
@@ -68,6 +71,7 @@
 
 #include <rfl/Generic.hpp>
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <flat_set>
@@ -215,9 +219,30 @@ public:
   ///
   /// Stores the document with one write of the whole document.
   /// What is written is the source as last loaded, with what each engaged
-  /// section owns in it replaced by that section's value.
+  /// section owns in it replaced by that section's value. Until the document
+  /// has been loaded, every store reads the source first, so that everything
+  /// already in it is carried over rather than wiped; nothing the document
+  /// holds is engaged or changed by that read.
+  ///
+  /// \throws exception_t With read_only if the transport cannot be written;
+  ///                     with invalid_payload if the source has to be read
+  ///                     first and does not parse, in which case it is left
+  ///                     as it is and discard_source() is the way past; with
+  ///                     the transport's own error, or io_error, if that read
+  ///                     fails.
   ///
   virtual auto store() -> void = 0;
+
+  ///
+  /// Forgets the source, so that a store() writes what the engaged sections
+  /// hold and nothing else.
+  /// No read happens, and every key, table and section the engaged sections
+  /// do not hold is dropped from the source by the next store(). That is
+  /// what it is for: replacing a source that does not parse, which store()
+  /// otherwise refuses to write over. Section values are untouched, and a
+  /// disengaged section is still not written. Lasts until the next load().
+  ///
+  virtual auto discard_source() -> void = 0;
 
   ///
   /// Returns the location, which is what the manager keys on and what errors quote.
@@ -297,6 +322,11 @@ public: // Overrides
   auto store() -> void override;
 
   ///
+  /// \see document_base::discard_source
+  ///
+  auto discard_source() -> void override;
+
+  ///
   /// \see document_base::location
   ///
   [[nodiscard]] auto location() const -> std::string override;
@@ -351,10 +381,50 @@ private: // Helpers
   ///
   [[nodiscard]] auto begin_load() -> std::pair<section_vec_t, std::uint64_t>;
 
+  ///
+  /// Runs one step against the endpoint or the transport, and puts a
+  /// config_error on whatever it throws that carries none.
+  /// An exception_t passes through as it is: a transport knows better than
+  /// this layer whether it failed with read_only, invalid_location or
+  /// io_error, and the endpoint's invalid_payload is more precise than any of
+  /// them. Anything else — a std::filesystem::filesystem_error, say — becomes
+  /// an io_error naming the location.
+  ///
+  /// \param action What the step does to the source, as a past participle
+  ///               completing "could not be ...".
+  /// \param step The step to run. Not retained.
+  /// \return Whatever the step returns.
+  /// \throws exception_t With the step's own error, or with io_error.
+  ///
+  auto guarded(std::string_view action, const std::invocable auto& step) const -> decltype(auto);
+
+  ///
+  /// Reads the source and parses it. Takes no lock and changes nothing.
+  ///
+  /// \return The parsed tree, or nothing where there is no source.
+  /// \throws exception_t With the endpoint's or the transport's own error, or
+  ///                     with io_error.
+  ///
+  [[nodiscard]] auto read_source() const -> std::optional<rfl::Generic::Object>;
+
+  ///
+  /// Reads the source for a store, where the document has no tree of its own
+  /// to start from yet. Retains nothing: a store that comes before any load()
+  /// reads the source afresh every time, so a store does not wipe what was
+  /// added to the source since an earlier one.
+  ///
+  /// \return The source's tree, empty where there is no source; or nothing,
+  ///         without a read, where a load() or discard_source() has given the
+  ///         document a tree.
+  /// \throws exception_t As read_source() does.
+  ///
+  [[nodiscard]] auto read_unknown_source() const -> std::optional<rfl::Generic::Object>;
+
 private: // Variables
   E format_;
   Tr carrier_;
   rfl::Generic::Object parsed_;      // The tree of the source as last loaded, which store() starts from.
+  bool source_known_ = false;        // Whether parsed_ is that tree: set by a load() or discard_source().
   std::uint64_t loads_begun_ = 0;    // Numbers every load in the order begin_load() was called.
   std::uint64_t load_installed_ = 0; // The number of the load whose read the cache holds.
   section_vec_t sections_;
@@ -573,30 +643,9 @@ auto document<E, Tr>::load(const load_policy policy) -> void
   // this line is not part of this load.
   const auto [sections, number] = begin_load();
 
-  auto present = false;
+  auto parsed = read_source();
 
-  try
-  {
-    present = carrier_.exists();
-  }
-  catch(const exception_t&)
-  {
-    // A transport carries a config_error of its own — read_only, invalid_location,
-    // io_error — and it knows better than this layer which one it was. Passed
-    // through rather than flattened; only a transport that threw something else
-    // needs a code putting on it.
-    throw;
-  }
-  catch(...)
-  {
-    throw exception_t{
-      std::format("arude::config: '{}' could not be reached: {}", carrier_.location(), exception_report()),
-      config_error::io_error};
-  }
-
-  auto parsed = rfl::Generic::Object{};
-
-  if(!present)
+  if(!parsed.has_value())
   {
     if(!is_set(policy, load_policy::create))
     {
@@ -611,35 +660,17 @@ auto document<E, Tr>::load(const load_policy policy) -> void
     // that is not there reads as an empty tree, which no section is in, so
     // every section takes its defaults below by the same route a single
     // missing section does.
-  }
-  else
-  {
-    try
-    {
-      parsed = format_.parse(carrier_);
-    }
-    catch(const exception_t&)
-    {
-      // The transport's own error, or the endpoint's invalid_payload. Either is
-      // more precise than io_error; see the note in the exists() branch above.
-      throw;
-    }
-    catch(...)
-    {
-      throw exception_t{
-        std::format("arude::config: '{}' could not be read: {}", carrier_.location(), exception_report()),
-        config_error::io_error};
-    }
+    parsed.emplace();
   }
 
-  const auto stripped = strip_subsection(parsed, sections);
+  const auto stripped = strip_subsection(parsed.value(), sections);
 
   auto installs = std::vector<std::function<void()>>{};
   installs.reserve(sections.size());
 
   for(const auto& section : sections)
   {
-    installs.push_back(section->prepare_load(section->name().empty() ? stripped : parsed, policy));
+    installs.push_back(section->prepare_load(section->name().empty() ? stripped : parsed.value(), policy));
   }
 
   // The lock is taken once, and only to swap the finished results in: the
@@ -659,7 +690,8 @@ auto document<E, Tr>::load(const load_policy policy) -> void
   }
 
   load_installed_ = number;
-  parsed_ = std::move(parsed);
+  parsed_ = std::move(parsed).value();
+  source_known_ = true;
 
   for(const auto& install : installs)
   {
@@ -678,6 +710,8 @@ auto document<E, Tr>::store() -> void
       std::format("arude::config: the transport at '{}' is read-only.", carrier_.location()), config_error::read_only};
   }
 
+  auto unknown_source = read_unknown_source();
+
   rfl::Generic::Object output;
 
   {
@@ -687,7 +721,11 @@ auto document<E, Tr>::store() -> void
     // from that same tree again.
     const auto lock = std::shared_lock{mutex_};
 
-    output = parsed_;
+    // A load() that finished since the read above installed its tree with
+    // the owned keys read from it. That pair wins, as the read above has no
+    // owned keys to go with it. source_known_ never goes back to false, so
+    // where it is false still, the read above happened.
+    output = source_known_ ? parsed_ : std::move(unknown_source).value_or(rfl::Generic::Object{});
 
     for(const auto& section : sections_)
     {
@@ -696,6 +734,19 @@ auto document<E, Tr>::store() -> void
   }
 
   format_.emit(carrier_, output);
+}
+
+///
+///
+template<endpoint_c E, transport_c Tr>
+auto document<E, Tr>::discard_source() -> void
+{
+  const auto lock = std::scoped_lock{mutex_};
+
+  // The owned keys of a section loaded before are left as they are: against
+  // an empty tree there is nothing for them to take out.
+  parsed_ = rfl::Generic::Object{};
+  source_known_ = true;
 }
 
 ///
@@ -785,6 +836,58 @@ auto document<E, Tr>::begin_load() -> std::pair<section_vec_t, std::uint64_t>
   return {sections_, ++loads_begun_};
 }
 
+///
+///
+template<endpoint_c E, transport_c Tr>
+auto document<E, Tr>::guarded(const std::string_view action, const std::invocable auto& step) const -> decltype(auto)
+{
+  try
+  {
+    return step();
+  }
+  catch(const exception_t&)
+  {
+    throw;
+  }
+  catch(...)
+  {
+    throw exception_t{
+      std::format("arude::config: '{}' could not be {}: {}", carrier_.location(), action, exception_report()),
+      config_error::io_error};
+  }
+}
+
+///
+///
+template<endpoint_c E, transport_c Tr>
+auto document<E, Tr>::read_source() const -> std::optional<rfl::Generic::Object>
+{
+  if(!guarded("reached", [this] -> bool { return carrier_.exists(); }))
+  {
+    return std::nullopt;
+  }
+
+  return guarded("read", [this] -> rfl::Generic::Object { return format_.parse(carrier_); });
+}
+
+///
+///
+template<endpoint_c E, transport_c Tr>
+auto document<E, Tr>::read_unknown_source() const -> std::optional<rfl::Generic::Object>
+{
+  {
+    const auto lock = std::shared_lock{mutex_};
+
+    if(source_known_)
+    {
+      return std::nullopt;
+    }
+  }
+
+  // Outside the lock, like every other read of the source.
+  return read_source().value_or(rfl::Generic::Object{});
+}
+
 } // namespace arude::config::detail
 
 namespace arude::config
@@ -835,8 +938,30 @@ public: // Methods
 
   ///
   /// Stores the document: one write of the whole document.
+  /// Whatever is in the source that no engaged section owns is carried over
+  /// as it is, whether or not the document was loaded first. A document
+  /// loaded carries over the source as that load read it; one never loaded
+  /// reads the source again on every store.
+  ///
+  /// \throws exception_t With read_only if the transport cannot be written;
+  ///                     with invalid_payload if the document was never
+  ///                     loaded and the source does not parse, in which case
+  ///                     the source is left as it is and discard_source() is
+  ///                     the way to replace it; with the transport's own
+  ///                     error, or io_error, if that read fails.
   ///
   auto store() -> void;
+
+  ///
+  /// Forgets the source, so that a store() writes what the engaged sections
+  /// hold and nothing else.
+  /// No read happens, and every key, table and section the engaged sections
+  /// do not hold is dropped from the source by the next store(). That is
+  /// what it is for: replacing a source that does not parse, which store()
+  /// otherwise refuses to write over. Section values are untouched, and a
+  /// disengaged section is still not written. Lasts until the next load().
+  ///
+  auto discard_source() -> void;
 
   ///
   /// Adds a section for the root of the document, registering the type with
@@ -909,6 +1034,13 @@ inline auto config_document_handle::load(const load_policy policy) -> void
 inline auto config_document_handle::store() -> void
 {
   document_->store();
+}
+
+///
+///
+inline auto config_document_handle::discard_source() -> void
+{
+  document_->discard_source();
 }
 
 ///

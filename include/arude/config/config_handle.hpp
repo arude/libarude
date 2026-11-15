@@ -96,7 +96,8 @@ public: // Accessors
   /// replaces them: a key the new value no longer produces, such as a
   /// std::optional member that was reset, leaves the source. A section that
   /// was never loaded has read nothing and so owns nothing yet: store() merges
-  /// its fields over its table, and removes no key from it.
+  /// its fields over whatever the section holds in the source, and removes no
+  /// key from it.
   ///
   /// \param value Value to cache. Not retained.
   ///
@@ -138,7 +139,19 @@ public: // Methods
 
   ///
   /// Stores the whole document this section belongs to.
-  /// Delegates to the document: a section cannot be written alone.
+  /// Delegates to the document: a section cannot be written alone. Whatever
+  /// is in the source that no loaded or set section owns is carried over as
+  /// it is, whether or not the document was loaded first. A document loaded
+  /// carries over the source as that load read it; one never loaded reads the
+  /// source again on every store.
+  ///
+  /// \throws exception_t With read_only if the transport cannot be written;
+  ///                     with invalid_payload if the document was never
+  ///                     loaded and the source does not parse, in which case
+  ///                     the source is left as it is and
+  ///                     config_document_handle::discard_source() is the way
+  ///                     to replace it; with the transport's own error, or
+  ///                     io_error, if that read fails.
   ///
   auto store() -> void;
 
