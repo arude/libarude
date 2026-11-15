@@ -59,6 +59,16 @@ jobs:
             os: ubuntu-latest
             cxx: clang++
             std: 23
+          # The only row building the module and the only one declining the
+          # configuration support. The two meet in src/arude.cppm, which must
+          # still export everything outside its ARUDE_NO_CONFIG guard when the
+          # guarded half is gone. Clang, because CMakeLists.txt refuses the
+          # module under GCC.
+          - name: Linux / Clang / module, no config
+            os: ubuntu-latest
+            cxx: clang++
+            module: ON
+            no_config: ON
           - name: Windows / MSVC
             os: windows-latest
           - name: macOS / AppleClang
@@ -86,6 +96,12 @@ jobs:
           fi
           if [ -n "${{ matrix.std }}" ]; then
             args+=(-DARUDE_CXX_STANDARD=${{ matrix.std }})
+          fi
+          if [ -n "${{ matrix.module }}" ]; then
+            args+=(-DARUDE_BUILD_MODULE=${{ matrix.module }})
+          fi
+          if [ -n "${{ matrix.no_config }}" ]; then
+            args+=(-DARUDE_NO_CONFIG=${{ matrix.no_config }})
           fi
           cmake "${args[@]}"
 

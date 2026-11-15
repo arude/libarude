@@ -22,6 +22,7 @@
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"
 #include "arude/signal_owner.hpp"
+#include "arude/type_key.hpp"
 #include "arude/type_name.hpp"
 #include "arude/type_traits.hpp"
 

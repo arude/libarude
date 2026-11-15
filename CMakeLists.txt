@@ -272,9 +272,10 @@ if(BUILD_TESTING)
 
   file(GLOB_RECURSE test_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp")
 
-  # test/config holds translation units built against a different exception base.
-  # They must stay out of the main binary: the macro changes exception_base's
-  # base class, and two definitions of it in one program is an ODR violation.
+  # test/config holds translation units built against a different configuration:
+  # another exception base, or no RTTI. They must stay out of the main binary:
+  # each changes what a header defines, and two definitions of one entity in a
+  # program is an ODR violation.
   list(FILTER test_sources EXCLUDE REGEX "/test/config/")
 
   # test/module imports rather than includes, so it needs the module target and
@@ -319,6 +320,28 @@ if(BUILD_TESTING)
     ${PROJECT_NAME}_test_runtime_error_base PRIVATE ${PROJECT_NAME} Catch2::Catch2WithMain
   )
   catch_discover_tests(${PROJECT_NAME}_test_runtime_error_base)
+
+  # Without RTTI, so arude/type_key.hpp compiles the branch the main binary
+  # never does. The option is set here for the reason given above, and the file
+  # refuses to compile if it is missing. Keyed on the front end rather than the
+  # compiler, so clang-cl gets /GR- too. MSVC warns D9025 that /GR- overrides
+  # the /GR CMake puts in CMAKE_CXX_FLAGS; the later option wins, as intended.
+  add_executable(${PROJECT_NAME}_test_type_key_no_rtti test/config/test_type_key_no_rtti.cpp)
+  set_target_properties(${PROJECT_NAME}_test_type_key_no_rtti
+                        PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                   CXX_STANDARD_REQUIRED ON
+                                   CXX_EXTENSIONS OFF)
+  target_compile_options(
+    ${PROJECT_NAME}_test_type_key_no_rtti
+    PRIVATE $<IF:$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>,/GR-,-fno-rtti>
+  )
+  # The project root, so the file includes the scenarios it shares with the main
+  # binary from test/helpers/ the way docs/cpp-conventions.md asks.
+  target_include_directories(${PROJECT_NAME}_test_type_key_no_rtti PRIVATE ${PROJECT_SOURCE_DIR})
+  target_link_libraries(
+    ${PROJECT_NAME}_test_type_key_no_rtti PRIVATE ${PROJECT_NAME} Catch2::Catch2WithMain
+  )
+  catch_discover_tests(${PROJECT_NAME}_test_type_key_no_rtti)
 
   # Guards the re-export list in src/arude.cppm. A public name added to a header
   # and not listed there is invisible to module consumers and to nobody else, so

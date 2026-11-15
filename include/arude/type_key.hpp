@@ -42,6 +42,7 @@
 #else
   #include <cstddef>
   #include <functional>
+  #include <type_traits>
 #endif // #if (defined ARUDE_TYPE_KEY_RTTI)
 
 #if !(defined ARUDE_TYPE_KEY_RTTI)
@@ -54,10 +55,19 @@ namespace arude::detail
 /// One object per T across the program, which is what makes the address an
 /// identity; see the file comment for where that breaks down.
 ///
-/// \tparam T Type to identify.
+/// It must not be const. A constant object goes to read-only data, and a linker
+/// folding identical data may merge read-only objects whose bytes are equal:
+/// MSVC's /OPT:ICF is documented to, and lld and gold can under --icf=all.
+/// Every one of these objects holds the same zero, so folding would give two
+/// types one address and so one key. Writable data is not folded, since a
+/// write through one address would then show through the other. Nothing
+/// writes to it; only its address is used.
+///
+/// \tparam T Type to identify, already stripped of cv-qualifiers and reference.
 ///
 template<typename T>
-inline constexpr char type_key_storage = 0;
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables): const would let identical-data folding merge it.
+inline char type_key_storage = 0;
 
 } // namespace arude::detail
 
@@ -127,9 +137,14 @@ constexpr auto type_key_t::id() const -> const void*
 ///
 /// Returns the identity token for a type.
 /// Equal for one type and unequal for any two different types, so it is usable
-/// as the key of an unordered_map. Not constexpr where the build has RTTI,
-/// because std::type_index is not constructible at compile time; do not write
-/// code that depends on it being one or the other.
+/// as the key of an unordered_map. Not constexpr in either build:
+/// std::type_index is not constructible at compile time, and the build without
+/// RTTI keeps the same signature so that code compiling against one compiles
+/// against the other.
+///
+/// A reference and top-level cv-qualifiers on T are ignored, as typeid ignores
+/// them, in both builds: type_key<const T&>() equals type_key<T>(). Qualifiers
+/// below the top level still count, so const T* and T* have different keys.
 ///
 /// \tparam T Type to identify. Need not be complete where the build has no RTTI.
 /// \return The token for T.
@@ -140,7 +155,9 @@ template<typename T>
 #if (defined ARUDE_TYPE_KEY_RTTI)
   return type_key_t{typeid(T)};
 #else
-  return type_key_t{&detail::type_key_storage<T>};
+  // Stripped so the key matches what typeid would give; without this, a type
+  // registered as const T and looked up as T would hit only with RTTI.
+  return type_key_t{&detail::type_key_storage<std::remove_cvref_t<T>>};
 #endif // #if (defined ARUDE_TYPE_KEY_RTTI)
 }
 

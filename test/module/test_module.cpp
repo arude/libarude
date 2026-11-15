@@ -165,6 +165,13 @@ SCENARIO("the module exports the public interface", "[module]")
       STATIC_REQUIRE(arude::type_name<int>() == "int");
     }
 
+    THEN("type_key is reachable and tells types apart")
+    {
+      REQUIRE(arude::type_key<int>() == arude::type_key<int>());
+      REQUIRE(arude::type_key<int>() != arude::type_key<double>());
+      STATIC_REQUIRE(std::is_same_v<decltype(arude::type_key<int>()), arude::type_key_t>);
+    }
+
     THEN("dependent_t is reachable and still transparent")
     {
       STATIC_REQUIRE(std::is_same_v<arude::dependent_t<int, module_test::widget>, module_test::widget>);
