@@ -175,7 +175,9 @@ endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
 
 # PUBLIC for the same reason: arude/config/ is headers, so a consumer compiles
-# reflect-cpp's headers itself and links what they compile.
+# reflect-cpp's headers itself and links what they compile. toml++ is named
+# beside it rather than left to arrive through reflect-cpp's own link, because
+# libarude includes it directly: the TOML endpoint's tree is a toml::table.
 #
 # The definition goes the same way round as the option: defined only when the
 # support was declined, so a consumer who builds against these headers without
@@ -183,7 +185,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
 if(ARUDE_NO_CONFIG)
   target_compile_definitions(${PROJECT_NAME} PUBLIC ARUDE_NO_CONFIG)
 else()
-  target_link_libraries(${PROJECT_NAME} PUBLIC reflectcpp)
+  target_link_libraries(${PROJECT_NAME} PUBLIC reflectcpp tomlplusplus::tomlplusplus)
 endif()
 
 # PUBLIC again: arude/config/transport_https.hpp includes httplib.h, so a

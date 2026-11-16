@@ -86,14 +86,18 @@ public: // Methods
   /// transport: two documents over one source would each write half the
   /// truth.
   ///
-  /// \tparam E Endpoint type, moved in.
+  /// \tparam E Endpoint type, moved in. It has to satisfy endpoint_c<E, Tr>:
+  ///            an endpoint that constrains the transport it reads and writes
+  ///            through is refused here, at the call, when paired with one
+  ///            that does not fit.
   /// \tparam Tr Transport type, moved in. The manager keys on its location().
   /// \param format The endpoint instance.
   /// \param carrier The transport instance.
   /// \return The document handle, the only way to add sections to it.
   /// \throws exception_t With already_registered_location if a document is already there.
   ///
-  template<endpoint_c E, transport_c Tr>
+  template<typename E, transport_c Tr>
+    requires endpoint_c<E, Tr>
   [[nodiscard]] auto register_document(E format, Tr carrier) -> config_document_handle;
 
   ///
@@ -160,7 +164,8 @@ private:                            // Variables
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, transport_c Tr>
+  requires endpoint_c<E, Tr>
 auto config_manager::register_document(E format, Tr carrier) -> config_document_handle
 {
   const auto location = carrier.location();

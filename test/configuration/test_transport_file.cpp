@@ -20,6 +20,7 @@
 #include <ranges>
 #include <string>
 #include <system_error>
+#include <tuple>
 
 namespace transport_file_test
 {
@@ -147,6 +148,93 @@ SCENARIO("a file transport replaces the file in one step", "[config][transport][
         REQUIRE(std::filesystem::is_directory(path));
         REQUIRE(transport_file_test::entries_in(directory.path()) == 1);
       }
+    }
+  }
+}
+
+// A read is one step, and only std::nullopt says that nothing is there: the
+// create policy acts on it. Something that is there and cannot be read is an
+// error instead, so it is never mistaken for a file that is missing.
+SCENARIO("a file transport reads a file in one step", "[config][transport][transport_file]")
+{
+  GIVEN("a file with something in it")
+  {
+    const auto directory = test_helpers::temp_directory{"arude_transport_file_read"};
+    const auto path = directory.file("app.toml");
+    test_helpers::write_text(path, "contents\n");
+
+    THEN("its bytes are read")
+    {
+      const auto bytes = arude::config::transport_file{path}.read();
+
+      REQUIRE(bytes.has_value());
+      // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+      REQUIRE(arude::config::as_text(bytes.value()) == "contents\n");
+    }
+  }
+
+  GIVEN("paths at which there is no file")
+  {
+    const auto directory = test_helpers::temp_directory{"arude_transport_file_missing"};
+    const auto blocker = directory.file("regular");
+    test_helpers::write_text(blocker, "in the way");
+
+    THEN("a missing file, one in a missing directory and one below a regular file all read as nothing")
+    {
+      REQUIRE(!arude::config::transport_file{directory.file("missing.toml")}.read().has_value());
+      REQUIRE(!arude::config::transport_file{directory.file("nowhere") / "app.toml"}.read().has_value());
+      REQUIRE(!arude::config::transport_file{blocker / "app.toml"}.read().has_value());
+    }
+  }
+
+  GIVEN("a directory where the file should be")
+  {
+    const auto directory = test_helpers::temp_directory{"arude_transport_file_directory"};
+    const auto path = directory.file("app.toml");
+    std::filesystem::create_directory(path);
+
+    THEN("the read is an io_error, not a missing file")
+    {
+      try
+      {
+        std::ignore = arude::config::transport_file{path}.read();
+        FAIL("reading a directory should have thrown");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        REQUIRE(ex.data() == arude::config::config_error::io_error);
+      }
+    }
+  }
+
+  GIVEN("a file nobody may read")
+  {
+    const auto directory = test_helpers::temp_directory{"arude_transport_file_unreadable"};
+    const auto path = directory.file("app.toml");
+    test_helpers::write_text(path, "contents\n");
+    std::filesystem::permissions(path, std::filesystem::perms::none, std::filesystem::perm_options::replace);
+
+    // Windows does not take the permission bits as a ban on reading, and
+    // neither does a process running as root; there, nothing is tested.
+    if(std::ifstream{path}.is_open())
+    {
+      std::filesystem::permissions(path, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
+      SKIP("the file can be read regardless of its permissions here");
+    }
+
+    THEN("the read is an io_error, not a missing file")
+    {
+      try
+      {
+        std::ignore = arude::config::transport_file{path}.read();
+        FAIL("reading a file without permission should have thrown");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        REQUIRE(ex.data() == arude::config::config_error::io_error);
+      }
+
+      std::filesystem::permissions(path, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
     }
   }
 }

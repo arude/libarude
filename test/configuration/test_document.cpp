@@ -376,9 +376,10 @@ struct scripted_source
   std::optional<std::string> text;
 
   ///
-  /// A step to run inside the next read, after the bytes that read returns
-  /// were taken. Cleared before it runs, so it runs once, and a load it
-  /// starts reads without it.
+  /// A step to run inside the next read that finds a source, after the bytes
+  /// that read returns were taken. Cleared before it runs, so it runs once,
+  /// and a load it starts reads without it. A read that finds no source
+  /// returns std::nullopt and leaves it for the next.
   ///
   std::function<void()> on_read;
 
@@ -408,8 +409,7 @@ public: // Structors
 public: // Accessors
   [[nodiscard]] auto location() const -> std::string;
   [[nodiscard]] auto writable() const -> bool;
-  [[nodiscard]] auto exists() const -> bool;
-  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   auto write(std::span<const std::byte> bytes) const -> void;
@@ -443,18 +443,13 @@ auto transport_scripted::writable() const -> bool
 
 ///
 ///
-auto transport_scripted::exists() const -> bool
+auto transport_scripted::read() const -> std::optional<std::vector<std::byte>>
 {
-  return source_->text.has_value();
-}
-
-///
-///
-auto transport_scripted::read() const -> std::vector<std::byte>
-{
+  // Nothing to read is an answer, not a read: on_read waits for one that
+  // returns bytes.
   if(!source_->text.has_value())
   {
-    throw arude::config::exception_t{"scripted: there is no source to read.", arude::config::config_error::io_error};
+    return std::nullopt;
   }
 
   auto bytes = arude::config::as_bytes(*source_->text);

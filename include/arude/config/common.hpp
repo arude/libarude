@@ -21,6 +21,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <flat_set>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -144,3 +146,15 @@ inline auto as_bytes(const std::string_view text) -> std::vector<std::byte>
 }
 
 } // namespace arude::config
+
+namespace arude::config::detail
+{
+
+///
+/// A set of keys of one table of a document.
+/// The comparison is transparent, so a key arriving as a std::string_view is
+/// looked up without being copied into a string first.
+///
+using key_set_t = std::flat_set<std::string, std::less<>>;
+
+} // namespace arude::config::detail

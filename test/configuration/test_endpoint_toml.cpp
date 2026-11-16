@@ -194,17 +194,36 @@ SCENARIO("an endpoint and a transport read a file without a manager", "[config][
       const auto written = endpoint_toml_test::make_current();
 
       auto document = arude::config::endpoint_toml::document_t{};
-      format.write_section(document, {}, written);
+      arude::config::write_section(format, document, {}, written);
       format.emit(carrier, document);
 
-      const auto read =
-        format.read_section<test_helpers::config_test_t>(format.parse(carrier), {}, arude::config::load_policy::none);
+      const auto parsed = format.parse(carrier);
 
       THEN("the round trip needs no manager, no document object and no cache")
       {
+        REQUIRE(parsed.has_value());
+
+        // The REQUIRE above checks it; the analyser cannot see through the macro.
+        // NOLINTBEGIN(bugprone-unchecked-optional-access)
+        const auto read = arude::config::read_section<test_helpers::config_test_t>(
+          format, parsed.value(), {}, arude::config::load_policy::none);
+        // NOLINTEND(bugprone-unchecked-optional-access)
+
         REQUIRE(read.name == written.name);
         REQUIRE(read.secret == written.secret);
       }
+    }
+  }
+
+  GIVEN("a path with no file at it, and the pair over it")
+  {
+    const auto file = test_helpers::temp_file{"arude_endpoint_toml_absent.toml"};
+    const auto carrier = arude::config::transport_file{file.path()};
+    const auto format = arude::config::endpoint_toml{};
+
+    THEN("parsing it says there is nothing there, rather than failing")
+    {
+      REQUIRE(!format.parse(carrier).has_value());
     }
   }
 }

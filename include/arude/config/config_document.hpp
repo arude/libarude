@@ -17,8 +17,9 @@
 /// Two rules keep a document safe, and both are the same idea — only write
 /// what you own:
 ///
-///   - The parsed tree is retained, and store() starts from it, so a table
-///     nobody registered survives untouched. Until the first load(), every
+///   - The parsed tree is retained, in the endpoint's own type, and store()
+///     starts from it, so a table nobody registered survives untouched, down
+///     to the type of every value in it. Until the first load(), every
 ///     store() reads the source first, for the same reason: what the document
 ///     has not looked at is not its to wipe. discard_source() is the one way
 ///     to say otherwise, for a source that does not parse.
@@ -82,23 +83,23 @@
 ///
 #pragma once
 
+#include "arude/config/common.hpp"
 #include "arude/config/config_handle.hpp"
 #include "arude/config/endpoint.hpp"
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
 #include "arude/config/transport.hpp"
+#include "arude/config/tree_reader.hpp"
+#include "arude/config/tree_writer.hpp"
 #include "arude/config/type_registry.hpp"
 #include "arude/exception_report.hpp"
 #include "arude/type_key.hpp"
-
-#include <rfl/Generic.hpp>
 
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <flat_map>
-#include <flat_set>
 #include <format>
 #include <functional>
 #include <memory>
@@ -160,20 +161,22 @@ public:
 
   ///
   /// Prepares a load of the section, and changes nothing yet.
-  /// Reads the section out of a parsed document and hands back the step that
-  /// installs what was read. The section itself is untouched until that step
-  /// runs: the document gathers one from every section first, so a load in
-  /// which any section fails changes none of them, a slow parse never blocks
-  /// a get(), and two loads under way at once each hold steps of their own
-  /// rather than sharing a place to put a half-finished result.
+  /// Reads the section out of a parsed tree, through the endpoint's reader,
+  /// and hands back the step that installs what was read. The section itself
+  /// is untouched until that step runs: the document gathers one from every
+  /// section first, so a load in which any section fails changes none of
+  /// them, a slow parse never blocks a get(), and two loads under way at once
+  /// each hold steps of their own rather than sharing a place to put a
+  /// half-finished result.
   ///
   /// A section that is not in the document takes its type's defaults, owning
   /// no key, where the policy carries load_policy::create. That is also what
   /// a source that is not there comes to: it is handed in as an empty
-  /// document, which no section is in.
+  /// tree, which no section is in.
   ///
-  /// \param document The parsed document. For the root section the document
-  ///                  has every registered subsection already stripped.
+  /// \param tree The endpoint's reader over the parsed tree. Not retained.
+  /// \param foreign The names of the registered named sections, which the
+  ///                root section does not see.
   /// \param policy What to do about a missing or differently versioned section.
   /// \return The step that installs the value read and the keys the section
   ///         owns in the source. The document calls it under its exclusive
@@ -183,23 +186,23 @@ public:
   ///                     invalid_payload or invalid_version if it is there
   ///                     and cannot be read.
   ///
-  [[nodiscard]] virtual auto prepare_load(const rfl::Generic::Object& document, load_policy policy)
+  [[nodiscard]] virtual auto prepare_load(const tree_reader& tree, const key_set_t& foreign, load_policy policy)
     -> std::function<void()> = 0;
 
   ///
-  /// Writes the section's value into a document.
+  /// Writes the section's value into a tree, through the endpoint's writer.
   /// A no-op while the section is disengaged: its subtree is left exactly as
   /// parsed, never written from defaults. Otherwise the keys the section owns
   /// in its table are replaced by the fields of its value, and every other
-  /// key in that table is left alone.
+  /// key in that table is left alone, node and type and all.
   ///
   /// Const, and it has to stay so: the keys a section owns describe the tree
   /// as last loaded, which is the tree every store() starts from, so writing
   /// must not move them on.
   ///
-  /// \param document The document to write into.
+  /// \param tree The endpoint's writer over the tree to write into. Not retained.
   ///
-  virtual auto write_into(rfl::Generic::Object& document) const -> void = 0;
+  virtual auto write_into(tree_writer& tree) const -> void = 0;
 
   ///
   /// Reports whether a value is cached.
@@ -342,10 +345,15 @@ public:
 /// retained tree, and the load numbers. io_mutex_ guards no data; it puts
 /// stores in order.
 ///
-/// \tparam E Endpoint type.
-/// \tparam Tr Transport type.
+/// The retained tree is the endpoint's own, E::document_t, and the document
+/// never looks inside it: a load reads it through the reader the endpoint
+/// makes for it, and a store writes it through the writer.
 ///
-template<endpoint_c E, transport_c Tr>
+/// \tparam E Endpoint type.
+/// \tparam Tr Transport type, which the endpoint has to suit.
+///
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 class document final : public document_base
 {
 public: // Structors
@@ -405,21 +413,19 @@ public: // Overrides
     -> void override;
 
 private: // Typedefs
+  using document_t = typename E::document_t;
   using section_vec_t = std::vector<std::shared_ptr<section_base>>;
   using key_owner_map_t = std::flat_map<std::string, std::string>; // Top-level key to the name of its section.
 
 private: // Helpers
   ///
-  /// Builds the document a root section reads: the parsed tree minus every
-  /// registered subsection, so the root section does not see them as unknown
-  /// fields.
+  /// Returns the names of the named sections among some, which are what the
+  /// root section does not see: it would read them as fields of its own.
   ///
-  /// \param parsed The parsed tree.
-  /// \param sections The sections whose names are stripped.
-  /// \return The stripped tree.
+  /// \param sections The sections.
+  /// \return The names, the root's empty one left out.
   ///
-  [[nodiscard]] static auto strip_subsection(const rfl::Generic::Object& parsed, const section_vec_t& sections)
-    -> rfl::Generic::Object;
+  [[nodiscard]] static auto subsection_names(const section_vec_t& sections) -> key_set_t;
 
   ///
   /// Starts a load: numbers it, and takes the sections attached so far.
@@ -434,30 +440,36 @@ private: // Helpers
   [[nodiscard]] auto begin_load() -> std::pair<section_vec_t, std::uint64_t>;
 
   ///
-  /// Runs one step against the endpoint or the transport, and puts a
-  /// config_error on whatever it throws that carries none.
+  /// Runs one step against the endpoint, the transport or the tree, and puts
+  /// a config_error on whatever it throws that carries none.
   /// An exception_t passes through as it is: a transport knows better than
   /// this layer whether it failed with read_only, invalid_location or
   /// io_error, and the endpoint's invalid_payload is more precise than any of
-  /// them. Anything else — a std::filesystem::filesystem_error, say — becomes
-  /// an io_error naming the location.
+  /// them. Anything else — a std::filesystem::filesystem_error, or a fault in
+  /// an endpoint's reader or writer, say — becomes an exception_t with the
+  /// error given, naming the location.
   ///
   /// \param action What the step does to the source, as a past participle
   ///               completing "could not be ...".
+  /// \param error What anything that is not an exception_t is reported as:
+  ///              io_error for reading and writing the source, invalid_payload
+  ///              for reading sections out of the tree.
   /// \param step The step to run. Not retained.
   /// \return Whatever the step returns.
-  /// \throws exception_t With the step's own error, or with io_error.
+  /// \throws exception_t With the step's own error, or with the error given.
   ///
-  auto guarded(std::string_view action, const std::invocable auto& step) const -> decltype(auto);
+  auto guarded(std::string_view action, config_error error, const std::invocable auto& step) const -> decltype(auto);
 
   ///
-  /// Reads the source and parses it. Takes no lock and changes nothing.
+  /// Reads the source and parses it, in the one read the transport makes.
+  /// Takes no lock and changes nothing.
   ///
-  /// \return The parsed tree, or nothing where there is no source.
+  /// \return The parsed tree, or nothing where the transport has nothing at
+  ///         its address.
   /// \throws exception_t With the endpoint's or the transport's own error, or
   ///                     with io_error.
   ///
-  [[nodiscard]] auto read_source() const -> std::optional<rfl::Generic::Object>;
+  [[nodiscard]] auto read_source() const -> std::optional<document_t>;
 
   ///
   /// Reads the source for a store, where the document has no tree of its own
@@ -470,12 +482,12 @@ private: // Helpers
   ///         document a tree.
   /// \throws exception_t As read_source() does.
   ///
-  [[nodiscard]] auto read_unknown_source() const -> std::optional<rfl::Generic::Object>;
+  [[nodiscard]] auto read_unknown_source() const -> std::optional<document_t>;
 
 private: // Variables
   E format_;
   Tr carrier_;
-  rfl::Generic::Object parsed_;      // The tree of the source as last loaded, which store() starts from.
+  document_t parsed_;                // The tree of the source as last loaded, which store() starts from.
   bool source_known_ = false;        // Whether parsed_ is that tree: set by a load() or discard_source().
   std::uint64_t loads_begun_ = 0;    // Numbers every load in the order begin_load() was called.
   std::uint64_t load_installed_ = 0; // The number of the load whose read the cache holds.
@@ -535,13 +547,13 @@ public: // Overrides
   ///
   /// \see section_base::prepare_load
   ///
-  [[nodiscard]] auto prepare_load(const rfl::Generic::Object& document, load_policy policy)
+  [[nodiscard]] auto prepare_load(const tree_reader& tree, const key_set_t& foreign, load_policy policy)
     -> std::function<void()> override;
 
   ///
   /// \see section_base::write_into
   ///
-  auto write_into(rfl::Generic::Object& document) const -> void override;
+  auto write_into(tree_writer& tree) const -> void override;
 
   ///
   /// \see section_base::engaged
@@ -614,15 +626,16 @@ auto section<T>::top_level_keys() const -> key_set_t
 ///
 ///
 template<configuration_c T>
-auto section<T>::prepare_load(const rfl::Generic::Object& document, const load_policy policy) -> std::function<void()>
+auto section<T>::prepare_load(const tree_reader& tree, const key_set_t& foreign, const load_policy policy)
+  -> std::function<void()>
 {
   // Value-initialised is what a section that is not there takes when it is
   // created: the type's defaults, and no key owned, as none was read.
   auto result = parsed_section<T>{};
 
-  if(detail::section_present(document, name_))
+  if(detail::section_present(tree, name_, foreign))
   {
-    result = detail::parse_section<T>(document, name_, policy, false);
+    result = detail::parse_section<T>(tree, name_, foreign, policy);
   }
   else if(!is_set(policy, load_policy::create))
   {
@@ -645,7 +658,7 @@ auto section<T>::prepare_load(const rfl::Generic::Object& document, const load_p
 ///
 ///
 template<configuration_c T>
-auto section<T>::write_into(rfl::Generic::Object& document) const -> void
+auto section<T>::write_into(tree_writer& tree) const -> void
 {
   if(!value_.has_value())
   {
@@ -657,7 +670,7 @@ auto section<T>::write_into(rfl::Generic::Object& document) const -> void
   // owned keys say what the section holds in that tree. Moved on to the keys
   // just written, they would no longer name a key that the loaded tree holds
   // and the value has since dropped, and the next store() would put it back.
-  detail::write_section_value<T>(document, name_, value_.value(), owned_keys_);
+  detail::write_section_value<T>(tree, name_, value_.value(), owned_keys_);
 }
 
 ///
@@ -696,7 +709,8 @@ auto section<T>::set_value(const T& value) -> void
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 document<E, Tr>::document(E format, Tr carrier, std::weak_ptr<type_registry> registry)
   : format_{std::move(format)}
   , carrier_{std::move(carrier)}
@@ -706,7 +720,8 @@ document<E, Tr>::document(E format, Tr carrier, std::weak_ptr<type_registry> reg
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 auto document<E, Tr>::load(const load_policy policy) -> void
 {
   // Everything down to the lock works on this snapshot and on locals: the
@@ -735,14 +750,27 @@ auto document<E, Tr>::load(const load_policy policy) -> void
     parsed.emplace();
   }
 
-  const auto stripped = strip_subsection(parsed.value(), sections);
+  const auto foreign = subsection_names(sections);
 
   auto installs = std::vector<std::function<void()>>{};
   installs.reserve(sections.size());
 
-  for(const auto& section : sections)
   {
-    installs.push_back(section->prepare_load(section->name().empty() ? stripped : parsed.value(), policy));
+    // The endpoint's reader over this read alone, and gone before parsed is
+    // moved below: it retains the tree it reads.
+    const auto tree = guarded(
+      "read",
+      config_error::invalid_payload,
+      [this, &parsed] -> decltype(auto) { return format_.make_reader(*parsed); });
+
+    for(const auto& section : sections)
+    {
+      installs.push_back(guarded(
+        "read",
+        config_error::invalid_payload,
+        [&section, &tree, &foreign, policy] -> std::function<void()>
+        { return section->prepare_load(tree, foreign, policy); }));
+    }
   }
 
   // The lock is taken once, and only to swap the finished results in: the
@@ -773,7 +801,8 @@ auto document<E, Tr>::load(const load_policy policy) -> void
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 auto document<E, Tr>::store() -> void
 {
   if(!carrier_.writable())
@@ -792,7 +821,7 @@ auto document<E, Tr>::store() -> void
 
   auto unknown_source = read_unknown_source();
 
-  rfl::Generic::Object output;
+  document_t output;
 
   {
     // Shared is enough, as nothing the document holds changes: neither
@@ -805,33 +834,45 @@ auto document<E, Tr>::store() -> void
     // the owned keys read from it. That pair wins, as the read above has no
     // owned keys to go with it. source_known_ never goes back to false, so
     // where it is false still, the read above happened.
-    output = source_known_ ? parsed_ : std::move(unknown_source).value_or(rfl::Generic::Object{});
+    output = source_known_ ? parsed_ : std::move(unknown_source).value_or(document_t{});
 
-    for(const auto& section : sections_)
-    {
-      section->write_into(output);
-    }
+    guarded(
+      "written",
+      config_error::io_error,
+      [this, &output] -> void
+      {
+        // The endpoint's writer over this store's copy alone, gone before
+        // the copy is emitted.
+        auto tree = format_.make_writer(output);
+
+        for(const auto& section : sections_)
+        {
+          section->write_into(tree);
+        }
+      });
   }
 
-  guarded("written", [this, &output] -> void { format_.emit(carrier_, output); });
+  guarded("written", config_error::io_error, [this, &output] -> void { format_.emit(carrier_, output); });
 }
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 auto document<E, Tr>::discard_source() -> void
 {
   const auto lock = std::scoped_lock{mutex_};
 
   // The owned keys of a section loaded before are left as they are: against
   // an empty tree there is nothing for them to take out.
-  parsed_ = rfl::Generic::Object{};
+  parsed_ = document_t{};
   source_known_ = true;
 }
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 auto document<E, Tr>::location() const -> std::string
 {
   return carrier_.location();
@@ -839,7 +880,8 @@ auto document<E, Tr>::location() const -> std::string
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 auto document<E, Tr>::writable() const -> bool
 {
   return carrier_.writable();
@@ -847,7 +889,8 @@ auto document<E, Tr>::writable() const -> bool
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 auto document<E, Tr>::mutex() const -> std::shared_mutex&
 {
   return mutex_;
@@ -855,7 +898,8 @@ auto document<E, Tr>::mutex() const -> std::shared_mutex&
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 auto document<E, Tr>::attach(std::shared_ptr<section_base> section) -> void
 {
   // Taken before the lock: for the root section this serialises a value of
@@ -878,7 +922,7 @@ auto document<E, Tr>::attach(std::shared_ptr<section_base> section) -> void
   // A named section's one key is its name, and the root's are its fields. So
   // this is where a name and a field of the root collide, whichever of the two
   // was added first: the root would read the table as one of its fields, and
-  // strip_subsection() would take its field away from it.
+  // hiding the section's name from the root would take its field away from it.
   for(const auto& key : keys)
   {
     if(const auto owner = key_owners_.find(key); owner != key_owners_.end())
@@ -909,7 +953,8 @@ auto document<E, Tr>::attach(std::shared_ptr<section_base> section) -> void
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 auto document<E, Tr>::register_type(
   const type_key_t& key, std::shared_ptr<section_base> section, std::shared_ptr<document_base> document) -> void
 {
@@ -924,36 +969,27 @@ auto document<E, Tr>::register_type(
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
-auto document<E, Tr>::strip_subsection(const rfl::Generic::Object& parsed, const section_vec_t& sections)
-  -> rfl::Generic::Object
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
+auto document<E, Tr>::subsection_names(const section_vec_t& sections) -> key_set_t
 {
-  auto subsection_names = std::flat_set<std::string>{};
+  auto names = key_set_t{};
 
   for(const auto& section : sections)
   {
     if(!section->name().empty())
     {
-      subsection_names.emplace(section->name());
+      names.emplace(section->name());
     }
   }
 
-  auto stripped = rfl::Generic::Object{};
-
-  for(const auto& [key, value] : parsed)
-  {
-    if(!subsection_names.contains(key))
-    {
-      stripped.insert(key, value);
-    }
-  }
-
-  return stripped;
+  return names;
 }
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
 auto document<E, Tr>::begin_load() -> std::pair<section_vec_t, std::uint64_t>
 {
   const auto lock = std::scoped_lock{mutex_};
@@ -963,8 +999,10 @@ auto document<E, Tr>::begin_load() -> std::pair<section_vec_t, std::uint64_t>
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
-auto document<E, Tr>::guarded(const std::string_view action, const std::invocable auto& step) const -> decltype(auto)
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
+auto document<E, Tr>::guarded(
+  const std::string_view action, const config_error error, const std::invocable auto& step) const -> decltype(auto)
 {
   try
   {
@@ -977,28 +1015,25 @@ auto document<E, Tr>::guarded(const std::string_view action, const std::invocabl
   catch(...)
   {
     throw exception_t{
-      std::format("arude::config: '{}' could not be {}: {}", carrier_.location(), action, exception_report()),
-      config_error::io_error};
+      std::format("arude::config: '{}' could not be {}: {}", carrier_.location(), action, exception_report()), error};
   }
 }
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
-auto document<E, Tr>::read_source() const -> std::optional<rfl::Generic::Object>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
+auto document<E, Tr>::read_source() const -> std::optional<document_t>
 {
-  if(!guarded("reached", [this] -> bool { return carrier_.exists(); }))
-  {
-    return std::nullopt;
-  }
-
-  return guarded("read", [this] -> rfl::Generic::Object { return format_.parse(carrier_); });
+  return guarded(
+    "read", config_error::io_error, [this] -> std::optional<document_t> { return format_.parse(carrier_); });
 }
 
 ///
 ///
-template<endpoint_c E, transport_c Tr>
-auto document<E, Tr>::read_unknown_source() const -> std::optional<rfl::Generic::Object>
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
+auto document<E, Tr>::read_unknown_source() const -> std::optional<document_t>
 {
   {
     const auto lock = std::shared_lock{mutex_};
@@ -1010,7 +1045,7 @@ auto document<E, Tr>::read_unknown_source() const -> std::optional<rfl::Generic:
   }
 
   // Outside the lock, like every other read of the source.
-  return read_source().value_or(rfl::Generic::Object{});
+  return read_source().value_or(document_t{});
 }
 
 } // namespace arude::config::detail

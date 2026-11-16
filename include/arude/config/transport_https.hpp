@@ -42,6 +42,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <format>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -141,22 +142,15 @@ public: // Accessors
   [[nodiscard]] auto writable() const -> bool;
 
   ///
-  /// Reports whether anything is at the URL.
-  /// Answering false is what lets load_policy::create know there is a
-  /// configuration to write out.
+  /// Reads the bytes at the URL, with one GET.
   ///
-  /// \return true if reading it now would find something.
-  /// \throws exception_t With io_error if the URL cannot be reached.
+  /// \return The bytes, exactly as served, or std::nullopt where the server
+  ///         answers 404 or 410, which is what lets load_policy::create know
+  ///         there is a configuration to write out.
+  /// \throws exception_t With io_error if the URL cannot be reached, or the
+  ///                     server answers with any other status outside 2xx.
   ///
-  [[nodiscard]] auto exists() const -> bool;
-
-  ///
-  /// Reads the bytes at the URL.
-  ///
-  /// \return The bytes, exactly as served.
-  /// \throws exception_t With io_error if the URL cannot be reached or read.
-  ///
-  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   ///
@@ -247,12 +241,12 @@ inline auto transport_https::configure(httplib::Client& client) const -> void
 
 ///
 ///
-inline auto transport_https::exists() const -> bool
+inline auto transport_https::read() const -> std::optional<std::vector<std::byte>>
 {
   auto client = httplib::Client{origin_};
   configure(client);
 
-  const auto result = client.Head(target_);
+  const auto result = client.Get(target_);
 
   if(!result)
   {
@@ -267,31 +261,7 @@ inline auto transport_https::exists() const -> bool
   // store() would then overwrite it with them.
   if(result->status == 404 || result->status == 410)
   {
-    return false;
-  }
-
-  if(result->status < 200 || result->status >= 300)
-  {
-    throw exception_t{std::format("arude::config: '{}' answered {}.", url_, result->status), config_error::io_error};
-  }
-
-  return true;
-}
-
-///
-///
-inline auto transport_https::read() const -> std::vector<std::byte>
-{
-  auto client = httplib::Client{origin_};
-  configure(client);
-
-  const auto result = client.Get(target_);
-
-  if(!result)
-  {
-    throw exception_t{
-      std::format("arude::config: '{}' could not be read: {}", url_, httplib::to_string(result.error())),
-      config_error::io_error};
+    return std::nullopt;
   }
 
   if(result->status < 200 || result->status >= 300)

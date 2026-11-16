@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <format>
 #include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -67,12 +68,7 @@ public: // Accessors
   ///
   /// \see transport_c
   ///
-  [[nodiscard]] auto exists() const -> bool;
-
-  ///
-  /// \see transport_c
-  ///
-  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   ///
@@ -111,23 +107,14 @@ auto transport_memory::writable() const -> bool
 
 ///
 ///
-auto transport_memory::exists() const -> bool
+auto transport_memory::read() const -> std::optional<std::vector<std::byte>>
 {
-  return store_->contains(slot_);
-}
-
-///
-///
-auto transport_memory::read() const -> std::vector<std::byte>
-{
-  const auto found = store_->find(slot_);
-
-  if(found == store_->end())
+  if(const auto found = store_->find(slot_); found != store_->end())
   {
-    throw arude::exception{"transport_test: nothing stored under that slot"};
+    return found->second;
   }
 
-  return found->second;
+  return std::nullopt;
 }
 
 ///
@@ -137,9 +124,77 @@ auto transport_memory::write(const std::span<const std::byte> bytes) const -> vo
   store_->insert_or_assign(slot_, std::vector<std::byte>{bytes.begin(), bytes.end()});
 }
 
+///
+/// A transport whose every read fails, as a device does that is there but
+/// cannot be read just now.
+///
+class transport_failing final
+{
+public: // Typedefs / Constants
+  ///
+  /// \see transport_c
+  ///
+  static constexpr auto name = std::string_view{"failing"};
+
+public: // Accessors
+  ///
+  /// \see transport_c
+  ///
+  [[nodiscard]] auto location() const -> std::string;
+
+  ///
+  /// \see transport_c
+  ///
+  [[nodiscard]] auto writable() const -> bool;
+
+  ///
+  /// \see transport_c
+  /// \throws arude::config::exception_t With io_error, always.
+  ///
+  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
+
+public: // Methods
+  ///
+  /// \see transport_c
+  ///
+  auto write(std::span<const std::byte> bytes) const -> void;
+};
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_failing::location() const -> std::string
+{
+  return std::format("{}:device", name);
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_failing::writable() const -> bool
+{
+  return true;
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_failing::read() const -> std::optional<std::vector<std::byte>>
+{
+  throw arude::config::exception_t{"transport_test: the device did not answer.", arude::config::config_error::io_error};
+}
+
+///
+///
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+auto transport_failing::write([[maybe_unused]] const std::span<const std::byte> bytes) const -> void
+{
+}
+
 } // namespace transport_test
 
 static_assert(arude::config::transport_c<transport_test::transport_memory>);
+static_assert(arude::config::transport_c<transport_test::transport_failing>);
 
 SCENARIO("a document round-trips through a transport of an application's own", "[config][transport]")
 {
@@ -195,6 +250,35 @@ SCENARIO("a document at a location with nothing behind it is a not_found", "[con
       {
         REQUIRE(ex.data() == arude::config::config_error::not_found);
       }
+    }
+  }
+}
+
+// Only std::nullopt says that nothing is there. A read that fails is not that,
+// and must not be taken for it: the create policy would hand out defaults, and
+// the next store would write them over a source that was there all along.
+SCENARIO("a transport whose read fails is not a missing source", "[config][transport]")
+{
+  GIVEN("a document over a transport whose read throws")
+  {
+    auto manager = arude::config::config_manager{};
+    auto document = manager.register_document(arude::config::endpoint_toml{}, transport_test::transport_failing{});
+    auto root = document.add_root<test_helpers::config_test_t>();
+
+    THEN("a load with the create policy is the transport's io_error, and creates nothing")
+    {
+      try
+      {
+        document.load(arude::config::load_policy::create);
+        FAIL("a load whose read fails should have thrown");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        REQUIRE(ex.data() == arude::config::config_error::io_error);
+        REQUIRE(ex.str().contains("did not answer"));
+      }
+
+      REQUIRE(!root.loaded());
     }
   }
 }

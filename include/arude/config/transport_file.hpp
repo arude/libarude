@@ -11,6 +11,7 @@
 #include "arude/config/common.hpp"
 #include "arude/config/transport.hpp"
 #include "arude/exception.hpp"
+#include "arude/exception_report.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +20,7 @@
 #include <fstream>
 #include <ios>
 #include <iterator>
+#include <optional>
 #include <random>
 #include <span>
 #include <string>
@@ -30,16 +32,24 @@ namespace arude::config::detail
 {
 
 ///
-/// Reads a whole file into bytes.
+/// Reads a whole file into bytes, in one step.
 /// Opened in binary mode, so a file written on one platform and read on
 /// another yields the same bytes rather than ones with their line endings
 /// rewritten.
 ///
-/// \param path File to read.
-/// \return The contents of the file.
-/// \throws exception_t With io_error if the file cannot be opened or cannot be read.
+/// The file is opened once and nothing is asked about it first, so it cannot
+/// change between a check and the read. The path is looked at only where the
+/// open fails, to tell a file that is not there from one that cannot be read,
+/// and where the read finds nothing, to tell an empty file from a directory.
 ///
-[[nodiscard]] auto read_file(const std::filesystem::path& path) -> std::vector<std::byte>;
+/// \param path File to read.
+/// \return The contents of the file, or std::nullopt where there is no file
+///         at the path: nothing of that name, a directory on the way that is
+///         missing or is not a directory, or a symbolic link to nothing.
+/// \throws exception_t With io_error if there is something at the path and it
+///                     cannot be opened or read, a directory among them.
+///
+[[nodiscard]] auto read_file(const std::filesystem::path& path) -> std::optional<std::vector<std::byte>>;
 
 ///
 /// Returns a path beside a file for a write to go to before it replaces the file.
@@ -75,24 +85,55 @@ auto write_file(const std::filesystem::path& path, std::span<const std::byte> by
 
 ///
 ///
-inline auto read_file(const std::filesystem::path& path) -> std::vector<std::byte>
+inline auto read_file(const std::filesystem::path& path) -> std::optional<std::vector<std::byte>>
 {
   auto stream = std::ifstream{path, std::ios::binary};
 
   if(!stream.is_open())
   {
+    // Asked only now, after the open failed, so that the answer explains the
+    // failure rather than predicting a read. A file created in between makes
+    // this an io_error, which is the safe side: it never hands out defaults
+    // for a file that is there.
+    auto unexamined = std::error_code{};
+
+    if(std::filesystem::status(path, unexamined).type() == std::filesystem::file_type::not_found)
+    {
+      return std::nullopt;
+    }
+
     throw exception_t{
       std::format("arude::config: cannot open '{}' for reading.", path.string()), config_error::io_error};
   }
 
-  auto text = std::string{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
-
-  if(stream.bad())
+  try
   {
-    throw exception_t{std::format("arude::config: failed while reading '{}'.", path.string()), config_error::io_error};
-  }
+    // A directory opens on some platforms, and what the read makes of it
+    // depends on the standard library: libstdc++ throws
+    // std::ios_base::failure from the first extraction, while libc++ reads
+    // nothing and reports the end of the file. So nothing read is checked
+    // against the path, rather than taken for an empty file.
+    auto text = std::string{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
 
-  return as_bytes(text);
+    if(auto unexamined = std::error_code{};
+       stream.bad() || (text.empty() && std::filesystem::is_directory(path, unexamined)))
+    {
+      throw exception_t{
+        std::format("arude::config: failed while reading '{}'.", path.string()), config_error::io_error};
+    }
+
+    return as_bytes(text);
+  }
+  catch(const exception_t&)
+  {
+    throw;
+  }
+  catch(...)
+  {
+    throw exception_t{
+      std::format("arude::config: failed while reading '{}': {}", path.string(), exception_report()),
+      config_error::io_error};
+  }
 }
 
 ///
@@ -246,21 +287,15 @@ public: // Accessors
   [[nodiscard]] auto writable() const -> bool;
 
   ///
-  /// Reports whether anything is at the path.
-  /// Answering false is what lets load_policy::create know there is a
-  /// configuration to write out.
+  /// Reads the bytes at the path, in one step. See detail::read_file.
   ///
-  /// \return true if reading it now would find something.
+  /// \return The bytes, exactly as stored, or std::nullopt where there is no
+  ///         file at the path, which is what lets load_policy::create know
+  ///         there is a configuration to write out.
+  /// \throws exception_t With io_error if there is something at the path and
+  ///                     it cannot be read.
   ///
-  [[nodiscard]] auto exists() const -> bool;
-
-  ///
-  /// Reads the bytes at the path.
-  ///
-  /// \return The bytes, exactly as stored.
-  /// \throws exception_t With io_error if the file cannot be read.
-  ///
-  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   ///
@@ -310,14 +345,7 @@ inline auto transport_file::writable() const -> bool
 
 ///
 ///
-inline auto transport_file::exists() const -> bool
-{
-  return std::filesystem::exists(path_);
-}
-
-///
-///
-inline auto transport_file::read() const -> std::vector<std::byte>
+inline auto transport_file::read() const -> std::optional<std::vector<std::byte>>
 {
   return detail::read_file(path_);
 }

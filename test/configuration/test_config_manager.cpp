@@ -18,6 +18,7 @@
 #include <format>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -51,8 +52,7 @@ public: // Structors
 public: // Accessors
   [[nodiscard]] auto location() const -> std::string;
   [[nodiscard]] auto writable() const -> bool;
-  [[nodiscard]] auto exists() const -> bool;
-  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   auto write(std::span<const std::byte> bytes) const -> void;
@@ -87,16 +87,14 @@ auto transport_memory::writable() const -> bool
 
 ///
 ///
-auto transport_memory::exists() const -> bool
+auto transport_memory::read() const -> std::optional<std::vector<std::byte>>
 {
-  return store_->contains(slot_);
-}
+  if(const auto found = store_->find(slot_); found != store_->end())
+  {
+    return found->second;
+  }
 
-///
-///
-auto transport_memory::read() const -> std::vector<std::byte>
-{
-  return store_->at(slot_);
+  return std::nullopt;
 }
 
 ///
@@ -125,8 +123,7 @@ public: // Structors
 public: // Accessors
   [[nodiscard]] auto location() const -> std::string;
   [[nodiscard]] auto writable() const -> bool;
-  [[nodiscard]] auto exists() const -> bool;
-  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   auto write(std::span<const std::byte> bytes) const -> void;
@@ -161,17 +158,9 @@ auto transport_tracked::writable() const -> bool
 ///
 ///
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
-auto transport_tracked::exists() const -> bool
+auto transport_tracked::read() const -> std::optional<std::vector<std::byte>>
 {
-  return false;
-}
-
-///
-///
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
-auto transport_tracked::read() const -> std::vector<std::byte>
-{
-  return {};
+  return std::nullopt;
 }
 
 ///

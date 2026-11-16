@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -74,8 +75,7 @@ public: // Structors
 public: // Accessors
   [[nodiscard]] auto location() const -> std::string;
   [[nodiscard]] auto writable() const -> bool;
-  [[nodiscard]] auto exists() const -> bool;
-  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   auto write(std::span<const std::byte> bytes) const -> void;
@@ -182,19 +182,17 @@ auto slow_transport::writable() const -> bool
 
 ///
 ///
-auto slow_transport::exists() const -> bool
-{
-  return store_->contains(slot_);
-}
-
-///
-///
-auto slow_transport::read() const -> std::vector<std::byte>
+auto slow_transport::read() const -> std::optional<std::vector<std::byte>>
 {
   auto lock = std::unique_lock{gate_->mutex};
   gate_->ready.wait(lock, [this] -> bool { return gate_->released; });
 
-  return store_->at(slot_);
+  if(const auto found = store_->find(slot_); found != store_->end())
+  {
+    return found->second;
+  }
+
+  return std::nullopt;
 }
 
 ///

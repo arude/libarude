@@ -37,8 +37,15 @@
 /// Under that sits the pair the document is built from, usable directly where
 /// a manager and a cache would be in the way: an endpoint is the format and a
 /// transport is the place, so endpoint_toml{}.parse(transport_file{path}) is
-/// one file read and nothing else. arude/config/endpoint_toml.hpp also carries
-/// to_toml() and from_toml() for text that never reaches a transport at all.
+/// one read of the file and nothing else, giving the endpoint's own tree, or
+/// std::nullopt where there is no file. read_section() and write_section()
+/// take a section out of such a tree and put one back.
+/// arude/config/endpoint_toml.hpp also carries to_toml() and from_toml() for
+/// text that never reaches a transport at all.
+///
+/// An endpoint of an application's own implements tree_reader and
+/// tree_writer, in arude/config/tree_reader.hpp and tree_writer.hpp, over its
+/// own tree, and satisfies endpoint_c; see arude/config/endpoint.hpp.
 ///
 
 #include "arude/config/base64.hpp"
@@ -51,8 +58,12 @@
 #include "arude/config/endpoint_toml.hpp"
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
+#include "arude/config/toml_tree_reader.hpp"
+#include "arude/config/toml_tree_writer.hpp"
 #include "arude/config/transport.hpp"
 #include "arude/config/transport_file.hpp"
+#include "arude/config/tree_reader.hpp"
+#include "arude/config/tree_writer.hpp"
 #include "arude/config/type_registry.hpp"
 
 // Out of the sorted group above because it is conditional. The HTTPS transport

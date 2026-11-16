@@ -205,14 +205,26 @@ using ::arude::config::has_previous_configuration_c;
 using ::arude::config::is_set;
 using ::arude::config::load_policy;
 using ::arude::config::migrate;
+using ::arude::config::node_kind;
 using ::arude::config::path_transport_c;
+using ::arude::config::read_section;
 using ::arude::config::to_toml;
+using ::arude::config::toml_tree_reader;
+using ::arude::config::toml_tree_writer;
 using ::arude::config::toml_version;
 using ::arude::config::transport_c;
 using ::arude::config::transport_file;
+using ::arude::config::tree_branch;
+using ::arude::config::tree_endpoint_c;
+using ::arude::config::tree_node;
+using ::arude::config::tree_read_options;
+using ::arude::config::tree_reader;
+using ::arude::config::tree_scalar_t;
+using ::arude::config::tree_writer;
 using ::arude::config::upgradable_configuration_c;
 using ::arude::config::version_of;
 using ::arude::config::version_t;
+using ::arude::config::write_section;
 
   // The HTTPS transport is exported only where the build has it, on the same
   // condition arude/config.hpp includes it on.

@@ -9,14 +9,22 @@
 
 #include "arude/config.hpp"
 #include "arude/non_owning_t.hpp"
+#include "test/helpers/temp_file.hpp"
+#include "test/helpers/write_text.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <toml++/toml.hpp>
 
 #include <cstddef>
+#include <format>
+#include <fstream>
+#include <iterator>
 #include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -44,8 +52,7 @@ public: // Structors
 public: // Accessors
   [[nodiscard]] auto location() const -> std::string;
   [[nodiscard]] auto writable() const -> bool;
-  [[nodiscard]] auto exists() const -> bool;
-  [[nodiscard]] auto read() const -> std::vector<std::byte>;
+  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   auto write(std::span<const std::byte> bytes) const -> void;
@@ -80,16 +87,14 @@ auto transport_memory::writable() const -> bool
 
 ///
 ///
-auto transport_memory::exists() const -> bool
+auto transport_memory::read() const -> std::optional<std::vector<std::byte>>
 {
-  return store_->contains(slot_);
-}
+  if(const auto found = store_->find(slot_); found != store_->end())
+  {
+    return found->second;
+  }
 
-///
-///
-auto transport_memory::read() const -> std::vector<std::byte>
-{
-  return store_->at(slot_);
+  return std::nullopt;
 }
 
 ///
@@ -124,13 +129,14 @@ struct marker_options
 
 ///
 /// A test endpoint whose option visibly changes what it parses.
-/// Parses TOML like any other, and stamps the document when told to.
+/// Wraps the TOML endpoint, and stamps the tree it parsed when told to; the
+/// reader and writer are the TOML endpoint's own, named as a wrapper names them.
 ///
 class marker_endpoint final
 {
 public: // Typedefs / Constants
   static constexpr auto name = std::string_view{"marker"};
-  using document_t = rfl::Generic::Object;
+  using document_t = arude::config::endpoint_toml::document_t;
 
 public: // Structors
   ///
@@ -145,17 +151,20 @@ public: // Accessors
   ///
   /// \tparam Tr Transport type.
   /// \param carrier Where the bytes come from.
-  /// \return The parsed document.
+  /// \return The parsed document, or std::nullopt where there is none.
   ///
   template<arude::config::transport_c Tr>
-  [[nodiscard]] auto parse(const Tr& carrier) const -> document_t;
+  [[nodiscard]] auto parse(const Tr& carrier) const -> std::optional<document_t>;
 
   ///
-  /// \see endpoint_toml::read_section
+  /// \see arude::config::endpoint_toml::make_reader
   ///
-  template<arude::config::configuration_c T>
-  [[nodiscard]] auto
-  read_section(const document_t& document, std::string_view section, arude::config::load_policy policy) const -> T;
+  [[nodiscard]] auto make_reader(const document_t& document) const -> arude::config::toml_tree_reader;
+
+  ///
+  /// \see arude::config::endpoint_toml::make_reader
+  ///
+  auto make_reader(document_t&& document) const -> arude::config::toml_tree_reader = delete;
 
 public: // Methods
   ///
@@ -169,13 +178,76 @@ public: // Methods
   auto emit(const Tr& carrier, const document_t& document) const -> void;
 
   ///
-  /// \see endpoint_toml::write_section
+  /// \see arude::config::endpoint_toml::make_writer
   ///
-  template<arude::config::configuration_c T>
-  auto write_section(document_t& document, std::string_view section, const T& val) const -> void;
+  [[nodiscard]] auto make_writer(document_t& document) const -> arude::config::toml_tree_writer;
 
 private: // Variables
+  arude::config::endpoint_toml format_;
   marker_options options_;
+};
+
+///
+/// A test endpoint that only works with a transport that has a path, as an
+/// endpoint integrated with its medium might. Otherwise the TOML endpoint.
+///
+class path_endpoint final
+{
+public: // Typedefs / Constants
+  static constexpr auto name = std::string_view{"path"};
+  using document_t = arude::config::endpoint_toml::document_t;
+
+public: // Accessors
+  ///
+  /// Reads and parses the file at the transport's path.
+  ///
+  /// \tparam Tr Transport type, which has to have a path.
+  /// \param carrier Where the bytes come from.
+  /// \return The parsed document, or std::nullopt where there is none.
+  ///
+  template<arude::config::path_transport_c Tr>
+  [[nodiscard]] auto parse(const Tr& carrier) const -> std::optional<document_t>;
+
+  ///
+  /// \see arude::config::endpoint_toml::make_reader
+  ///
+  [[nodiscard]] auto make_reader(const document_t& document) const -> arude::config::toml_tree_reader;
+
+  ///
+  /// \see arude::config::endpoint_toml::make_reader
+  ///
+  auto make_reader(document_t&& document) const -> arude::config::toml_tree_reader = delete;
+
+public: // Methods
+  ///
+  /// Writes the document to the transport's path.
+  ///
+  /// \tparam Tr Transport type, which has to have a path.
+  /// \param carrier Where the bytes go.
+  /// \param document The document to write.
+  ///
+  template<arude::config::path_transport_c Tr>
+  auto emit(const Tr& carrier, const document_t& document) const -> void;
+
+  ///
+  /// \see arude::config::endpoint_toml::make_writer
+  ///
+  [[nodiscard]] auto make_writer(document_t& document) const -> arude::config::toml_tree_writer;
+
+private: // Variables
+  arude::config::endpoint_toml format_;
+};
+
+///
+/// Whether a manager takes an endpoint and a transport as a pair, asked of the
+/// call itself rather than of the concept it is constrained with.
+///
+/// \tparam E Endpoint type.
+/// \tparam Tr Transport type.
+///
+template<typename E, typename Tr>
+concept registrable_c = requires(arude::config::config_manager& manager, E format, Tr carrier) {
+  manager.register_document(std::move(format), std::move(carrier));
 };
 
 ///
@@ -188,22 +260,13 @@ marker_endpoint::marker_endpoint(marker_options options)
 ///
 ///
 template<arude::config::transport_c Tr>
-auto marker_endpoint::parse(const Tr& carrier) const -> document_t
+auto marker_endpoint::parse(const Tr& carrier) const -> std::optional<document_t>
 {
-  const auto text = arude::config::as_text(carrier.read());
+  auto document = format_.parse(carrier);
 
-  auto result = rfl::toml::read<rfl::Generic>(text);
-
-  if(!result.has_value())
+  if(document.has_value() && options_.stamp)
   {
-    throw arude::exception{"endpoint_test: the bytes are not TOML"};
-  }
-
-  auto document = result.value().to_object().value();
-
-  if(options_.stamp)
-  {
-    document.insert(std::string{"stamped"}, rfl::Generic{true});
+    document->insert_or_assign("stamped", true);
   }
 
   return document;
@@ -211,11 +274,9 @@ auto marker_endpoint::parse(const Tr& carrier) const -> document_t
 
 ///
 ///
-template<arude::config::configuration_c T>
-auto marker_endpoint::read_section(
-  const document_t& document, const std::string_view section, const arude::config::load_policy policy) const -> T
+auto marker_endpoint::make_reader(const document_t& document) const -> arude::config::toml_tree_reader
 {
-  return arude::config::detail::parse_section<T>(document, section, policy, false).value;
+  return format_.make_reader(document);
 }
 
 ///
@@ -223,20 +284,65 @@ auto marker_endpoint::read_section(
 template<arude::config::transport_c Tr>
 auto marker_endpoint::emit(const Tr& carrier, const document_t& document) const -> void
 {
-  carrier.write(arude::config::as_bytes(rfl::toml::write(document)));
+  format_.emit(carrier, document);
 }
 
 ///
 ///
-template<arude::config::configuration_c T>
-auto marker_endpoint::write_section(document_t& document, const std::string_view section, const T& val) const -> void
+auto marker_endpoint::make_writer(document_t& document) const -> arude::config::toml_tree_writer
 {
-  arude::config::detail::write_section_value<T>(document, section, val);
+  return format_.make_writer(document);
+}
+
+///
+///
+template<arude::config::path_transport_c Tr>
+auto path_endpoint::parse(const Tr& carrier) const -> std::optional<document_t>
+{
+  auto stream = std::ifstream{carrier.path()};
+
+  if(!stream.is_open())
+  {
+    return std::nullopt;
+  }
+
+  return toml::parse(stream, carrier.path().string());
+}
+
+///
+///
+auto path_endpoint::make_reader(const document_t& document) const -> arude::config::toml_tree_reader
+{
+  return format_.make_reader(document);
+}
+
+///
+///
+template<arude::config::path_transport_c Tr>
+auto path_endpoint::emit(const Tr& carrier, const document_t& document) const -> void
+{
+  format_.emit(carrier, document);
+}
+
+///
+///
+auto path_endpoint::make_writer(document_t& document) const -> arude::config::toml_tree_writer
+{
+  return format_.make_writer(document);
 }
 
 } // namespace endpoint_test
 
-static_assert(arude::config::endpoint_c<endpoint_test::marker_endpoint>);
+static_assert(arude::config::endpoint_c<endpoint_test::marker_endpoint, endpoint_test::transport_memory>);
+
+// The constraint is checked against the transport the endpoint is used with,
+// so an endpoint that needs a path is fine with a file and refused, at the
+// interface, with anything else.
+static_assert(arude::config::tree_endpoint_c<endpoint_test::path_endpoint>);
+static_assert(arude::config::endpoint_c<endpoint_test::path_endpoint, arude::config::transport_file>);
+static_assert(!arude::config::endpoint_c<endpoint_test::path_endpoint, endpoint_test::transport_memory>);
+static_assert(endpoint_test::registrable_c<endpoint_test::path_endpoint, arude::config::transport_file>);
+static_assert(!endpoint_test::registrable_c<endpoint_test::path_endpoint, endpoint_test::transport_memory>);
 
 SCENARIO("a stateful endpoint's options reach the read", "[config][endpoint]")
 {
@@ -273,6 +379,40 @@ SCENARIO("a stateful endpoint's options reach the read", "[config][endpoint]")
       {
         REQUIRE(!arude::config::as_text(store.at("plain")).contains("stamped"));
         REQUIRE(arude::config::as_text(store.at("stamped")).contains("stamped"));
+      }
+    }
+  }
+}
+
+SCENARIO("an endpoint constrained to path transports works through a document over a file", "[config][endpoint]")
+{
+  GIVEN("a file, and a document over it whose endpoint reads by path")
+  {
+    const auto file = test_helpers::temp_file{"arude_endpoint_path.toml"};
+    test_helpers::write_text(file.path(), "version = 1\nname = \"from the file\"\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(endpoint_test::path_endpoint{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<endpoint_test::marker_config>();
+
+    WHEN("it is loaded, changed and stored")
+    {
+      document.load();
+      const auto loaded = root.get().name;
+
+      root.set(endpoint_test::marker_config{.name = "stored"});
+      document.store();
+
+      THEN("the load read the file, and the store wrote it")
+      {
+        REQUIRE(loaded == "from the file");
+
+        auto stream = std::ifstream{file.path()};
+        const auto text = std::string{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+
+        REQUIRE(text.contains("stored"));
+        REQUIRE(!text.contains("from the file"));
       }
     }
   }

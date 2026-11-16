@@ -25,6 +25,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <variant>
 
 import arude;
 
@@ -539,7 +540,8 @@ SCENARIO("the module exports the configuration interface", "[module][config]")
     THEN("the concepts and the version arithmetic came across")
     {
       STATIC_REQUIRE(arude::config::configuration_c<module_test::app_config_t>);
-      STATIC_REQUIRE(arude::config::endpoint_c<arude::config::endpoint_toml>);
+      STATIC_REQUIRE(arude::config::endpoint_c<arude::config::endpoint_toml, arude::config::transport_file>);
+      STATIC_REQUIRE(arude::config::tree_endpoint_c<arude::config::endpoint_toml>);
       STATIC_REQUIRE(std::is_same_v<module_test::app_config_t, module_test::app_config_v2>);
       STATIC_REQUIRE(arude::config::version_of<module_test::app_config_v2>() == 2);
     }
@@ -552,6 +554,46 @@ SCENARIO("the module exports the configuration interface", "[module][config]")
     THEN("a migration runs, so the steps came across with the types")
     {
       REQUIRE(arude::config::migrate<module_test::app_config_v2>(module_test::app_config_v1{}).version == 2);
+    }
+  }
+}
+
+// An endpoint of a module consumer's own is written against these names, so
+// every one of them has to come across, and the TOML endpoint's tree with them.
+SCENARIO("a module consumer reads a section through the tree interface", "[module][config]")
+{
+  GIVEN("the TOML endpoint and a tree of its own type")
+  {
+    const auto format = arude::config::endpoint_toml{};
+    auto document = arude::config::endpoint_toml::document_t{};
+
+    WHEN("a section is written into the tree and a reader is made over it")
+    {
+      arude::config::write_section(format, document, "app", module_test::app_config_t{.name = "through the tree"});
+
+      const arude::config::toml_tree_reader tree = format.make_reader(document);
+
+      THEN("the reader is a tree_reader whose root is a table, with the endpoint's options")
+      {
+        STATIC_REQUIRE(std::is_abstract_v<arude::config::tree_reader>);
+        STATIC_REQUIRE(std::is_abstract_v<arude::config::tree_writer>);
+        STATIC_REQUIRE(std::is_base_of_v<arude::config::tree_writer, arude::config::toml_tree_writer>);
+        STATIC_REQUIRE(std::is_same_v<decltype(tree.root()), arude::config::tree_node>);
+        STATIC_REQUIRE(std::is_same_v<decltype(tree.options()), arude::config::tree_read_options>);
+        STATIC_REQUIRE(sizeof(arude::config::tree_branch) == sizeof(void*));
+        STATIC_REQUIRE(std::is_same_v<std::variant_alternative_t<0, arude::config::tree_scalar_t>, bool>);
+
+        REQUIRE(tree.kind(tree.root()) == arude::config::node_kind::table);
+        REQUIRE(!tree.options().reject_unknown_fields);
+      }
+
+      THEN("the section reads back")
+      {
+        const auto read = arude::config::read_section<module_test::app_config_t>(
+          format, document, "app", arude::config::load_policy::none);
+
+        REQUIRE(read.name == "through the tree");
+      }
     }
   }
 }

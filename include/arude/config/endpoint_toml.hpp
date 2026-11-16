@@ -18,15 +18,17 @@
 #include "arude/config/endpoint.hpp"
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
+#include "arude/config/toml_tree_reader.hpp"
+#include "arude/config/toml_tree_writer.hpp"
 #include "arude/config/transport.hpp"
+#include "arude/config/tree_reader.hpp"
 #include "arude/exception_report.hpp"
 
-#include <rfl/toml/read.hpp>
-#include <rfl/toml/write.hpp>
+#include <toml++/toml.hpp>
 
-#include <cstddef>
 #include <format>
-#include <span>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -40,56 +42,59 @@ namespace arude::config::detail
 inline constexpr auto text_source = std::string_view{"<text>"};
 
 ///
-/// Parses TOML text into a document.
+/// Parses TOML text into a table.
 /// Shared by endpoint_toml::parse and by the text-level free functions, so the
 /// two cannot disagree about what counts as a TOML document.
 ///
 /// \param text TOML text. Not retained.
 /// \param source What the text came from, used in error messages only.
-/// \return The parsed document.
+/// \return The parsed table.
 /// \throws exception_t With invalid_payload if the text is not a TOML document.
 ///
-[[nodiscard]] auto read_toml_document(std::string_view text, std::string_view source) -> rfl::Generic::Object;
+[[nodiscard]] auto read_toml_document(std::string_view text, std::string_view source) -> toml::table;
+
+///
+/// Renders a table as TOML text, as rfl::toml::write renders one.
+///
+/// \param document The table. Not retained.
+/// \return The text.
+///
+[[nodiscard]] auto write_toml_document(const toml::table& document) -> std::string;
 
 ///
 ///
-inline auto read_toml_document(const std::string_view text, const std::string_view source) -> rfl::Generic::Object
+inline auto read_toml_document(const std::string_view text, const std::string_view source) -> toml::table
 {
   try
   {
-    auto result = rfl::toml::read<rfl::Generic>(std::string{text});
-
-    if(!result.has_value())
-    {
-      throw exception_t{
-        std::format("arude::config: '{}' is not valid TOML: {}", source, error_text(result.error())),
-        config_error::invalid_payload};
-    }
-
-    auto object = result.value().to_object();
-
-    if(!object.has_value())
-    {
-      throw exception_t{
-        std::format("arude::config: '{}' is not a TOML document.", source), config_error::invalid_payload};
-    }
-
-    return std::move(object).value();
-  }
-  catch(const exception_base&)
-  {
-    // Already translated by the branches above; pass it through untouched.
-    throw;
+    return toml::parse(text, source);
   }
   catch(...)
   {
-    // rfl::toml::read calls ::toml::parse directly, and toml++ throws rather
-    // than reporting through reflect-cpp's Result when the text is not TOML
-    // at all, so the throw never reaches the Result handling above.
+    // toml++ reports text that is not TOML by throwing toml::parse_error,
+    // which is not an arude::exception and would walk past every handler a
+    // caller of this subsystem has.
     throw exception_t{
       std::format("arude::config: '{}' is not valid TOML: {}", source, exception_report()),
       config_error::invalid_payload};
   }
+}
+
+///
+///
+inline auto write_toml_document([[maybe_unused]] const toml::table& document) -> std::string
+{
+  auto stream = std::ostringstream{};
+
+#if !(defined __clang_analyzer__)
+  // Hidden from clang-analyzer, which follows the print into toml++'s
+  // formatter and reports a reference formed from a null pointer there, on a
+  // pointer the formatter's constructor sets from a reference. The report
+  // lands in toml++'s own file, where no NOLINT of ours can reach it.
+  stream << document;
+#endif // #if !(defined __clang_analyzer__)
+
+  return std::move(stream).str();
 }
 
 } // namespace arude::config::detail
@@ -105,27 +110,52 @@ struct endpoint_toml_options
 {
   ///
   /// Whether a section read fails on a field its type does not declare.
-  /// Maps onto reflect-cpp's rfl::NoExtraFields processor, applied when a
-  /// section is read into its type; the document itself is always read as
-  /// rfl::Generic, which accepts everything, so tables nobody registered
-  /// survive.
+  /// Maps onto reflect-cpp's rfl::NoExtraFields processor, and applies to
+  /// every section read through a document over this endpoint, and through
+  /// read_section(). A named section is strict over its whole table. The root
+  /// section is strict over the top level, less the names of the registered
+  /// sections and every table or array of tables its type does not read: those
+  /// are somebody else's as far as the root can tell, and tables nobody
+  /// registered survive. So a misspelt value at the top level is refused, and
+  /// a misspelt table field of the root's type is passed over.
   ///
   bool reject_unknown_fields = false;
 };
 
 ///
 /// The TOML endpoint, which is what a configuration is written in by default.
-/// A stateful instance whose operations are const members working on a whole
-/// document, so two documents can share one endpoint value without racing.
+/// A stateful instance whose operations are const members, so two documents
+/// can share one endpoint value without racing.
 ///
-/// Two limitations follow reflect-cpp's Generic, and are pinned by
-/// test/configuration/test_generic_toml.cpp:
+/// Its tree is toml++'s own table. What no section owns is never rebuilt, and
+/// keeps the TOML type the file gave it across a store: an offset or a local
+/// date-time, a local date, a local time, an integer as against a float, an
+/// array of tables, an inline table. That covers tables nobody registered,
+/// top-level keys beside the root, and keys at the top of a section's table
+/// that the section's type does not declare. A field the type declares is
+/// written whole, so a key inside such a field that the type does not declare
+/// is gone after a store.
 ///
-///   - TOML has no null, and reflect-cpp omits an unset std::optional field
-///     rather than spelling a null state. A disengaged field is left out of
-///     the document; a field that reads back absent is disengaged again.
-///   - Generic's variant has no datetime alternative, so a timestamp field
-///     degrades to a plain string on the way in and out.
+/// What a store does not keep:
+///
+///   - Comments. toml++ does not keep them, so a store writes a file without
+///     the comments it was read with.
+///   - Layout. Keys come out in toml++'s order, sorted and values before
+///     tables; a dotted key comes back as a table; numbers and strings are
+///     written in toml++'s style. Types and values are kept, and an integer
+///     no section owns keeps its base. A section's own fields are written
+///     afresh, so an integer field the type declares comes back in decimal.
+///
+/// How a section's own fields are written is reflect-cpp's business:
+///
+///   - TOML has no null, and an unset std::optional is left out of the file
+///     rather than spelt as anything; a field that reads back absent is
+///     disengaged again.
+///   - reflect-cpp maps no type onto a TOML date or time. An rfl::Timestamp
+///     is written as a string in its pattern and read back from one, and a
+///     native TOML date under its key is refused as invalid_payload. A
+///     std::chrono::duration is written as a table of a count and a unit.
+///     A native date or time survives only as data no section owns.
 ///
 class endpoint_toml final
 {
@@ -136,9 +166,9 @@ public: // Typedefs / Constants
   static constexpr auto name = std::string_view{"toml"};
 
   ///
-  /// The neutral document type: an ordered map of keys to rfl::Generic.
+  /// The endpoint's tree: toml++'s table, as parsed.
   ///
-  using document_t = rfl::Generic::Object;
+  using document_t = toml::table;
 
 public: // Structors
   ///
@@ -154,40 +184,35 @@ public: // Structors
 
 public: // Accessors
   ///
-  /// Reads a whole document from a transport and parses it.
+  /// Reads a whole document from a transport, in one read, and parses it.
   ///
   /// \tparam Tr Transport type. A parameter rather than a member, so a
   ///             medium-integrated endpoint can constrain it further and fail
   ///             at the interface when mispaired.
   /// \param carrier Where the bytes come from.
-  /// \return The parsed document.
-  /// \throws exception_t With invalid_payload if the bytes are not a TOML document.
+  /// \return The parsed table, or std::nullopt where the transport has
+  ///         nothing at its address.
+  /// \throws exception_t With invalid_payload if the bytes are not a TOML
+  ///                     document, or whatever the transport throws.
   ///
   template<transport_c Tr>
-  [[nodiscard]] auto parse(const Tr& carrier) const -> document_t;
+  [[nodiscard]] auto parse(const Tr& carrier) const -> std::optional<document_t>;
 
   ///
-  /// Reads one section of a document into its type.
-  /// An empty name is the root: the document's own top-level keys, with every
-  /// registered subsection already stripped by the caller.
+  /// Returns a reader over a table, which carries this endpoint's options to
+  /// every section read through it.
   ///
-  /// The version decision lives here: the section's own subtree declares its
-  /// version, independently of every other section. The root section's
-  /// version is the document's version — there is no second document-level
-  /// version, and cross-section migration is what a root section's upgrade
-  /// does.
+  /// \param document The table. Retained by the reader, which must not outlive it.
+  /// \return The reader.
   ///
-  /// \tparam T Configuration type.
-  /// \param document The document to read from.
-  /// \param section The section name, or empty for the root.
-  /// \param policy What to do about a differently versioned section.
-  /// \return The configuration, migrated where the policy allows it.
-  /// \throws exception_t With invalid_payload, which is also what a named
-  ///                     section that is not in the document is, or with
-  ///                     invalid_version.
+  [[nodiscard]] auto make_reader(const document_t& document) const -> toml_tree_reader;
+
   ///
-  template<configuration_c T>
-  [[nodiscard]] auto read_section(const document_t& document, std::string_view section, load_policy policy) const -> T;
+  /// Deleted, as the reader would outlive the table it reads.
+  /// \param document The table.
+  /// \return Nothing.
+  ///
+  auto make_reader(document_t&& document) const -> toml_tree_reader = delete;
 
 public: // Methods
   ///
@@ -195,28 +220,18 @@ public: // Methods
   ///
   /// \tparam Tr Transport type, as for parse.
   /// \param carrier Where the bytes go.
-  /// \param document The document to write.
+  /// \param document The table to write.
   ///
   template<transport_c Tr>
   auto emit(const Tr& carrier, const document_t& document) const -> void;
 
   ///
-  /// Writes one section of a document from its type.
-  /// An empty name is the root: the document's own top-level keys. The
-  /// version written is the one the type declares, whatever the value's
-  /// version member happens to hold, so a file cannot come out claiming to be
-  /// a version it is not.
+  /// Returns a writer over a table.
   ///
-  /// The value's fields are merged over whatever the section's table already
-  /// holds: a key the value does not produce is left in it.
+  /// \param document The table. Retained by the writer, which must not outlive it.
+  /// \return The writer.
   ///
-  /// \tparam T Configuration type.
-  /// \param document The document to write into.
-  /// \param section The section name, or empty for the root.
-  /// \param val Configuration to write. Not retained.
-  ///
-  template<configuration_c T>
-  auto write_section(document_t& document, std::string_view section, const T& val) const -> void;
+  [[nodiscard]] auto make_writer(document_t& document) const -> toml_tree_writer;
 
 private: // Variables
   endpoint_toml_options options_;
@@ -224,11 +239,10 @@ private: // Variables
 
 ///
 /// Renders a configuration as TOML text.
-/// The text-level counterpart to endpoint_toml::write_section, for a
-/// configuration that has to become a string rather than reach a transport.
-/// The version written is the one the type declares, whatever the value's
-/// version member happens to hold, so text cannot come out claiming to be a
-/// version it is not.
+/// The text-level counterpart to write_section(), for a configuration that has
+/// to become a string rather than reach a transport. The version written is
+/// the one the type declares, whatever the value's version member happens to
+/// hold, so text cannot come out claiming to be a version it is not.
 ///
 /// \tparam T Configuration type.
 /// \param val Configuration to render. Not retained.
@@ -275,7 +289,7 @@ template<configuration_c To>
 
 ///
 ///
-inline endpoint_toml::endpoint_toml(endpoint_toml_options options)
+inline endpoint_toml::endpoint_toml(const endpoint_toml_options options)
   : options_{options}
 {
 }
@@ -283,9 +297,23 @@ inline endpoint_toml::endpoint_toml(endpoint_toml_options options)
 ///
 ///
 template<transport_c Tr>
-auto endpoint_toml::parse(const Tr& carrier) const -> document_t
+auto endpoint_toml::parse(const Tr& carrier) const -> std::optional<document_t>
 {
-  return detail::read_toml_document(as_text(carrier.read()), carrier.location());
+  const auto bytes = carrier.read();
+
+  if(!bytes.has_value())
+  {
+    return std::nullopt;
+  }
+
+  return detail::read_toml_document(as_text(bytes.value()), carrier.location());
+}
+
+///
+///
+inline auto endpoint_toml::make_reader(const document_t& document) const -> toml_tree_reader
+{
+  return toml_tree_reader{document, tree_read_options{.reject_unknown_fields = options_.reject_unknown_fields}};
 }
 
 ///
@@ -293,24 +321,15 @@ auto endpoint_toml::parse(const Tr& carrier) const -> document_t
 template<transport_c Tr>
 auto endpoint_toml::emit(const Tr& carrier, const document_t& document) const -> void
 {
-  carrier.write(as_bytes(rfl::toml::write(document)));
+  carrier.write(as_bytes(detail::write_toml_document(document)));
 }
 
 ///
 ///
-template<configuration_c T>
-auto endpoint_toml::read_section(
-  const document_t& document, const std::string_view section, const load_policy policy) const -> T
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
+inline auto endpoint_toml::make_writer(document_t& document) const -> toml_tree_writer
 {
-  return detail::parse_section<T>(document, section, policy, options_.reject_unknown_fields).value;
-}
-
-///
-///
-template<configuration_c T>
-auto endpoint_toml::write_section(document_t& document, const std::string_view section, const T& val) const -> void
-{
-  detail::write_section_value<T>(document, section, val);
+  return toml_tree_writer{document};
 }
 
 ///
@@ -318,10 +337,10 @@ auto endpoint_toml::write_section(document_t& document, const std::string_view s
 template<configuration_c T>
 auto to_toml(const T& val) -> std::string
 {
-  auto document = rfl::Generic::Object{};
-  detail::write_section_value<T>(document, {}, val);
+  auto document = endpoint_toml::document_t{};
+  write_section(endpoint_toml{}, document, {}, val);
 
-  return rfl::toml::write(document);
+  return detail::write_toml_document(document);
 }
 
 ///
@@ -331,8 +350,7 @@ auto from_toml(const std::string_view text) -> T
 {
   // load_policy::none, so a version other than T's is refused rather than
   // migrated: from_toml_migrated is what accepts an older one.
-  return detail::parse_section<T>(detail::read_toml_document(text, detail::text_source), {}, load_policy::none, false)
-    .value;
+  return read_section<T>(endpoint_toml{}, detail::read_toml_document(text, detail::text_source), {}, load_policy::none);
 }
 
 ///
@@ -340,9 +358,8 @@ auto from_toml(const std::string_view text) -> T
 template<configuration_c To>
 auto from_toml_migrated(const std::string_view text) -> To
 {
-  return detail::parse_section<To>(
-           detail::read_toml_document(text, detail::text_source), {}, load_policy::upgrade_to_current, false)
-    .value;
+  return read_section<To>(
+    endpoint_toml{}, detail::read_toml_document(text, detail::text_source), {}, load_policy::upgrade_to_current);
 }
 
 ///
@@ -350,8 +367,18 @@ auto from_toml_migrated(const std::string_view text) -> To
 inline auto toml_version(const std::string_view text) -> version_t
 {
   const auto document = detail::read_toml_document(text, detail::text_source);
+  const auto tree = endpoint_toml{}.make_reader(document);
 
-  return detail::read_generic<detail::endpoint_probe>(rfl::Generic{document}, false).version;
+  try
+  {
+    return detail::read_tree<detail::endpoint_probe>(tree, tree.root(), {}, false).version;
+  }
+  catch(...)
+  {
+    throw exception_t{
+      std::format("arude::config: '{}' declares no configuration version: {}", detail::text_source, exception_report()),
+      config_error::invalid_payload};
+  }
 }
 
 } // namespace arude::config
