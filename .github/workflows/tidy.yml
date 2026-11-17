@@ -45,8 +45,14 @@ jobs:
           # rejects the .pcm outright. Left in, the files would instead be
           # analysed with fallback flags and invent diagnostics no build
           # produces. Lint them locally with a matching clang and the module on.
+          #
+          # test_transport_https.cpp is excluded for a like reason: it is only
+          # built with ARUDE_HTTPS=ON, which this job does not configure, so it
+          # is not in the compilation database and httplib.h is not on any
+          # include path. Lint it locally against a build with HTTPS on.
           mapfile -t sources < <(
-            git ls-files 'src/*.cpp' 'test/*.cpp' 'benchmark/*.cpp' | grep -v '^test/module/'
+            git ls-files 'src/*.cpp' 'test/*.cpp' 'benchmark/*.cpp' |
+              grep -v -e '^test/module/' -e '^test/configuration/test_transport_https\.cpp$'
           )
           if [ ${#sources[@]} -eq 0 ]; then
             echo "No translation units to analyse."

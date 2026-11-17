@@ -127,7 +127,8 @@ if(ARUDE_HTTPS)
   # cpp-httplib finds the TLS backend itself and puts both the library and the
   # CPPHTTPLIB_*_SUPPORT define on its own target, so nothing here has to name
   # OpenSSL. Swapping the backend is HTTPLIB_REQUIRE_MBEDTLS or
-  # HTTPLIB_REQUIRE_WOLFSSL in place of this line.
+  # HTTPLIB_REQUIRE_WOLFSSL in place of this line; the transport's test, which
+  # makes its certificate through the OpenSSL API, is then left out.
   set(HTTPLIB_REQUIRE_OPENSSL ON)
   CPMAddPackage("gh:yhirose/cpp-httplib@0.51.0")
 
@@ -289,6 +290,14 @@ if(BUILD_TESTING)
   # which is about build configuration rather than about this feature.
   if(ARUDE_NO_CONFIG)
     list(FILTER test_sources EXCLUDE REGEX "/test/configuration/")
+  endif()
+
+  # The HTTPS transport is not built at all unless it was asked for, and its
+  # test runs TLS servers against it through cpp-httplib and makes their
+  # certificate through the OpenSSL API, so it needs both the transport and
+  # the OpenSSL backend.
+  if(NOT ARUDE_HTTPS OR NOT HTTPLIB_REQUIRE_OPENSSL)
+    list(FILTER test_sources EXCLUDE REGEX "/test/configuration/test_transport_https\\.cpp$")
   endif()
 
   add_executable(${PROJECT_NAME}_test ${test_sources})
