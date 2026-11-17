@@ -11,10 +11,12 @@
 ///
 /// Umbrella header for libarude's configuration support.
 ///
-/// Include this one rather than the headers below. Whether a configuration can
-/// be upgraded is decided by which version headers a translation unit has
-/// seen — see arude/config/migration.hpp — so every translation unit should
-/// see the same set, and this header is what guarantees that.
+/// Include this one rather than the headers below. It covers the library and
+/// nothing else: the version headers of a configuration are the application's
+/// own, and this header cannot include them. Whether a configuration can be
+/// upgraded is decided by which of them a translation unit has seen, so
+/// including the newest version's header wherever the configuration is used
+/// is the application's to do; see arude/config/migration.hpp.
 ///
 /// A configuration is a plain aggregate, reflected by reflect-cpp and stored
 /// as TOML. An application goes through arude::config::config_manager, which
@@ -54,6 +56,7 @@
 #include "arude/config/config_document.hpp"
 #include "arude/config/config_handle.hpp"
 #include "arude/config/config_manager.hpp"
+#include "arude/config/document_base.hpp"
 #include "arude/config/endpoint.hpp"
 #include "arude/config/endpoint_toml.hpp"
 #include "arude/config/load_policy.hpp"
@@ -67,8 +70,8 @@
 #include "arude/config/type_registry.hpp"
 
 // Out of the sorted group above because it is conditional. The HTTPS transport
-// is the one part of libarude that has to be asked for, since TLS is a
-// dependency the build cannot fetch on its own; see the header for why.
+// is the one part of the configuration support that has to be asked for, since
+// TLS is a dependency the build cannot fetch on its own; see the header for why.
 #if (defined ARUDE_HTTPS)
   #include "arude/config/transport_https.hpp"
 #endif // #if (defined ARUDE_HTTPS)

@@ -15,9 +15,9 @@
 ///
 #pragma once
 
+#include "arude/config/document_base.hpp"
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
-#include "arude/type_traits.hpp"
 
 #include <memory>
 #include <mutex>
@@ -27,21 +27,6 @@
 
 namespace arude::config::detail
 {
-
-class document_base;
-
-///
-/// The erased document a handle reaches through.
-/// This header is parsed before document_base is defined, so a member access
-/// written against the bare type would be diagnosed here as access into an
-/// incomplete type. dependent_t makes the member's type depend on T, so the
-/// access is a dependent expression and is only checked where the handle is
-/// instantiated — by which point document_base is complete.
-///
-/// \tparam T Configuration type. Carried to make the alias dependent, and nothing else.
-///
-template<configuration_c T>
-using document_ptr_t = std::shared_ptr<dependent_t<T, document_base>>;
 
 ///
 /// The section of one type, and the value it is a view of.
@@ -158,7 +143,7 @@ public: // Methods
 
 private: // Variables
   std::shared_ptr<detail::section<T>> section_;
-  detail::document_ptr_t<T> document_;
+  std::shared_ptr<detail::document_base> document_;
 };
 
 ///

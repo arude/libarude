@@ -295,7 +295,9 @@ parse_section(const tree_reader& tree, std::string_view name, const key_set_t& f
 /// Parses a subtree as whichever version of To's chain matches its version
 /// number. Walks backwards through previous_t, which reaches every version
 /// that existed when To was written and no further: a subtree newer than this
-/// build is a failure, not something to guess at.
+/// build is a failure, not something to guess at. A version on the way whose
+/// previous_t and upgrade() disagree is a compile error; see
+/// upgrade_matches_previous().
 ///
 /// \tparam To Version to end up at.
 /// \tparam Candidate Version being considered.
@@ -690,6 +692,11 @@ auto parse_section_chain(
   const version_t version,
   const bool strict) -> parsed_section<To>
 {
+  static_assert(
+    upgrade_matches_previous<Candidate>(),
+    "arude::config: this version names a previous_t whose upgrade() returns another version. "
+    "previous_t and upgrade() must describe the same step.");
+
   if(version == version_of<Candidate>())
   {
     const auto found = read_tree<Candidate>(tree, subtree, foreign, strict);

@@ -10,7 +10,8 @@
 ///
 /// The free functions at the end convert between a configuration and TOML text
 /// with no transport in the way, for a configuration that arrived as a string
-/// rather than from somewhere. Everything else here goes through a transport.
+/// rather than from somewhere. The endpoint itself reads and writes a whole
+/// document through a transport.
 ///
 #pragma once
 

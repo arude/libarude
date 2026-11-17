@@ -19,6 +19,7 @@
 #include "test/helpers/write_text.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <httplib.h>
 #include <openssl/asn1.h>
@@ -32,7 +33,6 @@
 #include <chrono>
 #include <concepts>
 #include <cstdio>
-#include <filesystem>
 #include <format>
 #include <memory>
 #include <mutex>

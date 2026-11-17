@@ -12,10 +12,10 @@
 ///
 
 #include "arude/config.hpp"
-#include "arude/exception.hpp"
 #include "test/helpers/temp_file.hpp"
 #include "test/helpers/write_text.hpp"
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <rfl/Flatten.hpp>
 #include <rfl/Rename.hpp>

@@ -16,7 +16,6 @@
 #include <array>
 #include <cstddef>
 #include <span>
-#include <string>
 #include <vector>
 
 SCENARIO("binary holds any range of bytes", "[config][binary]")

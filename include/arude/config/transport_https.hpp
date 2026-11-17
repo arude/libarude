@@ -8,12 +8,12 @@
 ///
 /// The HTTPS transport, over cpp-httplib.
 ///
-/// Opt-in, and the only part of libarude that is: configure with
-/// -DARUDE_HTTPS=ON. Everything else here is fetched by CPM, but TLS is not —
-/// cpp-httplib needs OpenSSL, mbedTLS or wolfSSL, and the build has to find one
-/// of them. A consumer that wants configuration from a file, or from an EEPROM
-/// of its own, should not be made to carry that, which is why this is off
-/// unless it is asked for.
+/// Opt-in, and the only part of the configuration support that is: configure
+/// with -DARUDE_HTTPS=ON. Everything else here is fetched by CPM, but TLS is
+/// not — cpp-httplib needs OpenSSL, mbedTLS or wolfSSL, and the build has to
+/// find one of them. A consumer that wants configuration from a file, or from
+/// an EEPROM of its own, should not be made to carry that, which is why this is
+/// off unless it is asked for.
 ///
 /// The URL is split into an origin and a request target at construction, so
 /// the transport carries both halves rather than parsing per call. Only
@@ -40,7 +40,6 @@
 
 #include "arude/config/common.hpp"
 #include "arude/config/transport.hpp"
-#include "arude/exception.hpp"
 
 #include <httplib.h>
 
@@ -498,8 +497,8 @@ public: // Accessors
   /// transport_https_options::redirect_limit of them.
   ///
   /// \return The bytes, exactly as served, or std::nullopt where the server
-  ///         answers 404 or 410, which is what lets load_policy::create know
-  ///         there is a configuration to write out.
+  ///         answers 404 or 410, which is the source that load_policy::create
+  ///         gives defaults for.
   /// \throws exception_t With io_error if the URL cannot be reached, if the
   ///                     server answers with any other status outside 2xx, or
   ///                     if a redirect has no Location, leads anywhere but an

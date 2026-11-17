@@ -21,7 +21,7 @@
 /// The configuration support is carried under the same guard the headers use.
 /// ARUDE_NO_CONFIG is a PUBLIC compile definition of the library target, so it
 /// arrives here from the build that decided it, and the module offers what the
-/// build has: with the support declined, reflect-cpp and Boost.URL were never
+/// build has: with the support declined, reflect-cpp and toml++ were never
 /// fetched, the header cannot compile, and there are no names to export.
 ///
 
@@ -42,9 +42,10 @@ module;
 #include "arude/type_traits.hpp"
 
 // Out of the sorted group above because it is conditional, and guarded exactly
-// as arude/arude.hpp guards it. This pulls reflect-cpp's and Boost.URL's
-// headers into the fragment as well, which is what a module consumer of the
-// configuration interface needs and costs a header consumer nothing.
+// as arude/arude.hpp guards it. This pulls reflect-cpp's and toml++'s headers
+// into the fragment as well, and cpp-httplib's where the build has the HTTPS
+// transport, which is what a module consumer of the configuration interface
+// needs and costs a header consumer nothing.
 #if !(defined ARUDE_NO_CONFIG)
   #include "arude/config.hpp"
 #endif // #if !(defined ARUDE_NO_CONFIG)

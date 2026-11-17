@@ -42,11 +42,12 @@
 #include "arude/config/common.hpp"
 #include "arude/config/config_document.hpp"
 #include "arude/config/config_handle.hpp"
+#include "arude/config/document_base.hpp"
 #include "arude/config/endpoint.hpp"
 #include "arude/config/load_policy.hpp"
+#include "arude/config/migration.hpp"
 #include "arude/config/transport.hpp"
 #include "arude/config/type_registry.hpp"
-#include "arude/exception_report.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/type_key.hpp"
 #include "arude/type_name.hpp"
@@ -54,6 +55,7 @@
 #include <cstddef>
 #include <format>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <string_view>

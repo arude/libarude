@@ -37,9 +37,9 @@ namespace arude::config
 /// not_found, report io_error to the user, and refuse to start on
 /// invalid_payload, which one message string would not let it do.
 ///
-/// Thrown by the transports as well as by the manager, so a failure keeps the
-/// same name whether it came from a socket, a file or the cache, and nothing in
-/// between has to translate it.
+/// Thrown by the transports and the endpoints as well as by the documents and
+/// the manager, so a failure keeps the same name whether it came from a
+/// socket, a file or the cache, and nothing in between has to translate it.
 ///
 /// Formats as its own name, through arude/enum.hpp, so an exception report
 /// names the error rather than calling the payload unformattable.
@@ -47,7 +47,8 @@ namespace arude::config
 enum class config_error : std::uint8_t
 {
   ///
-  /// The location is malformed, or names a transport this manager cannot reach.
+  /// The location is malformed: a transport refused the address it was
+  /// constructed with.
   ///
   invalid_location,
 
@@ -77,7 +78,8 @@ enum class config_error : std::uint8_t
   invalid_version,
 
   ///
-  /// The source is not a configuration of that type, or the cache holds another type under the location.
+  /// The source does not parse, or does not hold a configuration of the type
+  /// asked for.
   ///
   invalid_payload,
 
@@ -87,7 +89,8 @@ enum class config_error : std::uint8_t
   io_error,
 
   ///
-  /// There is nothing at the location, or nothing cached for it.
+  /// There is nothing at the location, a section is not in the source or has
+  /// nothing cached, or a type is registered nowhere.
   ///
   not_found,
 

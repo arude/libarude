@@ -9,6 +9,7 @@
 
 #include "arude/config.hpp"
 #include "arude/exception.hpp"
+#include "test/helpers/config_test_v1.hpp"
 #include "test/helpers/config_test_v2.hpp"
 #include "test/helpers/temp_file.hpp"
 

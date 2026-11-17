@@ -14,6 +14,7 @@
 
 #include <condition_variable>
 #include <cstddef>
+#include <format>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -22,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace config_handle_test

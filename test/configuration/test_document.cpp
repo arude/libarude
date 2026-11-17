@@ -13,6 +13,7 @@
 #include "test/helpers/temp_file.hpp"
 #include "test/helpers/write_text.hpp"
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <rfl/Generic.hpp>
 #include <rfl/Skip.hpp>
@@ -750,9 +751,9 @@ SCENARIO("the create policy leaves the source alone", "[config][document]")
     {
       document.load(arude::config::load_policy::create);
 
-      // The defect: load() used to call store(), which skips disengaged
-      // sections, so it wrote an empty file. The next start-up then found that
-      // file present, failed to parse it, and kept failing until somebody
+      // A load never writes. A store from inside it would skip every
+      // section, none being engaged yet, and leave an empty file, which the
+      // next start-up would find present and fail to parse until somebody
       // deleted it by hand.
       THEN("nothing was written")
       {
@@ -902,7 +903,7 @@ SCENARIO("reading a section that was never loaded is a not_found", "[config][doc
     }
 
     // std::bad_optional_access derives from std::exception, not from
-    // arude::exception_base, so it used to walk straight past the catch every
+    // arude::exception_base, so it would walk straight past the catch every
     // other failure here is caught by.
     THEN("it is catchable as an arude::exception_base")
     {

@@ -10,7 +10,6 @@
 
 #include "arude/config/common.hpp"
 #include "arude/config/transport.hpp"
-#include "arude/exception.hpp"
 #include "arude/exception_report.hpp"
 
 #include <cstddef>
@@ -290,8 +289,8 @@ public: // Accessors
   /// Reads the bytes at the path, in one step. See detail::read_file.
   ///
   /// \return The bytes, exactly as stored, or std::nullopt where there is no
-  ///         file at the path, which is what lets load_policy::create know
-  ///         there is a configuration to write out.
+  ///         file at the path, which is the source that load_policy::create
+  ///         gives defaults for.
   /// \throws exception_t With io_error if there is something at the path and
   ///                     it cannot be read.
   ///

@@ -8,8 +8,8 @@
 ///
 
 #include "arude/config.hpp"
-#include "arude/exception.hpp"
 #include "arude/non_owning_t.hpp"
+#include "test/helpers/config_test_v1.hpp"
 #include "test/helpers/config_test_v2.hpp"
 
 #include <catch2/catch_test_macros.hpp>
