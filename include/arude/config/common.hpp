@@ -111,10 +111,75 @@ enum class config_error : std::uint8_t
 ///
 using exception_t = exception<config_error>;
 
+} // namespace arude::config
+
+namespace arude::config::detail
+{
+
+// The configuration support is compiled into the library and throws
+// arude::exception, whose base class and layout ARUDE_EXCEPTION_RUNTIME_ERROR_BASE
+// decides. A consumer compiled with a different setting from the library would
+// catch those exceptions as a type they are not, which no compiler or linker
+// notices on its own. So each setting declares a symbol of its own,
+// src/config/common.cpp defines the one the library was built with, and every
+// translation unit including this header refers to the one it was built with:
+// a mismatch fails to link, naming the symbol, rather than failing at run time.
+//
+// MSVC has no attribute that keeps an unread variable, so there the check is
+// detect_mismatch instead, which the linker compares across every object file
+// it links and reports by name. The symbol is declared regardless and unused.
+
+#if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+
+///
+/// Defined by the library only when it was built with ARUDE_EXCEPTION_RUNTIME_ERROR_BASE.
+///
+extern const int library_built_with_exception_runtime_error_base;
+
+  #if (defined _MSC_VER)
+    #pragma detect_mismatch("arude_exception_runtime_error_base", "defined")
+  #else
+
+///
+/// Refers to the library's definition, so a library built otherwise fails to link.
+/// Emitted although nothing reads it, which is what makes the reference.
+///
+[[maybe_unused, gnu::used, gnu::retain]] inline constexpr const int* exception_base_check =
+  &library_built_with_exception_runtime_error_base;
+
+  #endif // #if (defined _MSC_VER)
+
+#else
+
+///
+/// Defined by the library only when it was built without ARUDE_EXCEPTION_RUNTIME_ERROR_BASE.
+///
+extern const int library_built_without_exception_runtime_error_base;
+
+  #if (defined _MSC_VER)
+    #pragma detect_mismatch("arude_exception_runtime_error_base", "undefined")
+  #else
+
+///
+/// Refers to the library's definition, so a library built otherwise fails to link.
+/// Emitted although nothing reads it, which is what makes the reference.
+///
+[[maybe_unused, gnu::used, gnu::retain]] inline constexpr const int* exception_base_check =
+  &library_built_without_exception_runtime_error_base;
+
+  #endif // #if (defined _MSC_VER)
+
+#endif // #if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+
+} // namespace arude::config::detail
+
+namespace arude::config
+{
+
 ///
 /// Interprets bytes as text.
 /// std::byte and char are both narrow character types and may alias anything,
-/// so the reinterpret_cast below is legal: the bytes are the text, unchanged.
+/// so reading one as the other is legal: the bytes are the text, unchanged.
 ///
 /// \param bytes Bytes to interpret. Not retained.
 /// \return The text.
@@ -123,30 +188,12 @@ using exception_t = exception<config_error>;
 
 ///
 /// Interprets text as bytes.
-/// \see as_text for why the reinterpret_cast is legal.
+/// \see as_text for why reading one as the other is legal.
 ///
 /// \param text Text to interpret. Not retained.
 /// \return The bytes.
 ///
 [[nodiscard]] auto as_bytes(std::string_view text) -> std::vector<std::byte>;
-
-///
-///
-inline auto as_text(const std::span<const std::byte> bytes) -> std::string
-{
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  const auto* const begin = reinterpret_cast<const char*>(bytes.data());
-  return {begin, bytes.size()};
-}
-
-///
-///
-inline auto as_bytes(const std::string_view text) -> std::vector<std::byte>
-{
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  const auto* const begin = reinterpret_cast<const std::byte*>(text.data());
-  return {begin, begin + text.size()};
-}
 
 } // namespace arude::config
 

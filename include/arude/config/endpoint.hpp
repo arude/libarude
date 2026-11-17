@@ -481,59 +481,6 @@ auto read_keys() -> key_set_t
 
 ///
 ///
-inline auto holds_tables(const tree_reader& tree, const tree_node node) -> bool
-{
-  const auto kind = tree.kind(node);
-
-  if(kind != node_kind::array)
-  {
-    return kind == node_kind::table;
-  }
-
-  auto any = false;
-  auto all_tables = true;
-
-  const auto each = [&tree, &any, &all_tables](const tree_node element) -> bool
-  {
-    any = true;
-    all_tables = tree.kind(element) == node_kind::table;
-
-    return all_tables;
-  };
-
-  tree.for_each_element(node, element_visitor_for{each});
-
-  return any && all_tables;
-}
-
-///
-///
-inline auto section_present(const tree_reader& tree, const std::string_view name, const key_set_t& foreign) -> bool
-{
-  const auto root = tree.root();
-
-  if(!name.empty())
-  {
-    return tree.field(name, root).has_value();
-  }
-
-  auto present = false;
-
-  const auto each = [&tree, &foreign, &present](const std::string_view key, const tree_node value) -> void
-  {
-    if(!present && !foreign.contains(key) && !holds_tables(tree, value))
-    {
-      present = true;
-    }
-  };
-
-  tree.for_each_field(root, field_visitor_for{each});
-
-  return present;
-}
-
-///
-///
 template<configuration_c T>
 auto root_hidden(const tree_reader& tree, const key_set_t& foreign) -> key_set_t
 {
@@ -551,27 +498,6 @@ auto root_hidden(const tree_reader& tree, const key_set_t& foreign) -> key_set_t
   tree.for_each_field(tree.root(), field_visitor_for{each});
 
   return hidden;
-}
-
-///
-///
-inline auto acquire_subtree(const tree_reader& tree, const std::string_view name) -> tree_node
-{
-  const auto root = tree.root();
-
-  if(name.empty())
-  {
-    return root;
-  }
-
-  const auto found = tree.field(name, root);
-
-  if(!found.has_value())
-  {
-    throw exception{std::format("arude::config: there is no section named '{}'.", name)};
-  }
-
-  return found.value();
 }
 
 ///

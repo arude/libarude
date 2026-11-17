@@ -45,6 +45,18 @@ include(cmake/stacktrace.cmake)
 
 arude_find_stacktrace_library(ARUDE_STACKTRACE_LIBRARY ${ARUDE_CXX_STANDARD})
 
+# ---- Exception base ----
+
+# Derives arude::exception from std::runtime_error, so a std::exception handler
+# catches it; see arude/exception.hpp. The setting changes the exception's base
+# class and layout, and the configuration support compiled into this library
+# throws it, so the library and everything linking it have to agree. That is
+# why it is an option with a PUBLIC definition rather than a macro a consumer
+# defines for itself. A consumer that defines it anyway, against a library
+# built without it, fails to link the configuration support; see
+# arude/config/common.hpp.
+option(ARUDE_EXCEPTION_RUNTIME_ERROR_BASE "Derive arude exceptions from std::runtime_error" OFF)
+
 # ---- Coverage ----
 
 option(ARUDE_ENABLE_COVERAGE "Build with coverage instrumentation" OFF)
@@ -93,11 +105,16 @@ if(NOT ARUDE_NO_CONFIG)
   CPMAddPackage("gh:getml/reflect-cpp@0.19.0")
 
   # Built at our standard for the same reason Catch2 is; see the comment there.
+  #
+  # Position independent because src/config is compiled into this library and
+  # calls into reflect-cpp, so a shared build of libarude links reflect-cpp's
+  # static archive into a shared object, which needs position independent code.
   foreach(config_target IN ITEMS reflectcpp)
     if(TARGET ${config_target})
       set_target_properties(${config_target} PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
                                                         CXX_STANDARD_REQUIRED ON
-                                                        CXX_EXTENSIONS OFF)
+                                                        CXX_EXTENSIONS OFF
+                                                        POSITION_INDEPENDENT_CODE ON)
     endif()
   endforeach()
 endif()
@@ -146,6 +163,20 @@ endif()
 file(GLOB_RECURSE headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp")
 file(GLOB_RECURSE sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
+# src/config holds the definitions behind arude/config/, which include
+# reflect-cpp's and toml++'s headers. With the configuration support declined
+# neither was fetched, so none of it can compile, and nothing would call it.
+if(ARUDE_NO_CONFIG)
+  list(FILTER sources EXCLUDE REGEX "/src/config/")
+endif()
+
+# The HTTPS transport's definitions include cpp-httplib, which is only fetched
+# when the transport was asked for, and its header refuses to compile without
+# ARUDE_HTTPS.
+if(NOT ARUDE_HTTPS)
+  list(FILTER sources EXCLUDE REGEX "/src/config/transport_https\\.cpp$")
+endif()
+
 # ---- Create library ----
 
 # Note: for header-only libraries change all PUBLIC flags to INTERFACE and create an interface
@@ -175,8 +206,8 @@ endif()
 # that includes it puts it on every consumer's include path too.
 target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
 
-# PUBLIC for the same reason: arude/config/ is headers, so a consumer compiles
-# reflect-cpp's headers itself and links what they compile. toml++ is named
+# PUBLIC for the same reason: the headers in arude/config/ include reflect-cpp's,
+# so a consumer compiles them itself and links what they compile. toml++ is named
 # beside it rather than left to arrive through reflect-cpp's own link, because
 # libarude includes it directly: the TOML endpoint's tree is a toml::table.
 #
@@ -187,6 +218,12 @@ if(ARUDE_NO_CONFIG)
   target_compile_definitions(${PROJECT_NAME} PUBLIC ARUDE_NO_CONFIG)
 else()
   target_link_libraries(${PROJECT_NAME} PUBLIC reflectcpp tomlplusplus::tomlplusplus)
+endif()
+
+# PUBLIC, so the library and its consumers are built with the same exception
+# base; see the option above.
+if(ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
 endif()
 
 # PUBLIC again: arude/config/transport_https.hpp includes httplib.h, so a
@@ -338,6 +375,13 @@ if(BUILD_TESTING)
   # compiler, so clang-cl gets /GR- too. MSVC warns D9025 that /GR- overrides
   # the /GR CMake puts in CMAKE_CXX_FLAGS; the later option wins, as intended.
   add_executable(${PROJECT_NAME}_test_type_key_no_rtti test/config/test_type_key_no_rtti.cpp)
+
+  # The configuration support's type index is keyed on what arude/type_key.hpp
+  # gives, so its use from a consumer without RTTI is tested here too, against
+  # the library built with RTTI.
+  if(NOT ARUDE_NO_CONFIG)
+    target_sources(${PROJECT_NAME}_test_type_key_no_rtti PRIVATE test/config/test_config_no_rtti.cpp)
+  endif()
   set_target_properties(${PROJECT_NAME}_test_type_key_no_rtti
                         PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
                                    CXX_STANDARD_REQUIRED ON

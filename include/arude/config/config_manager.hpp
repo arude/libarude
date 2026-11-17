@@ -262,43 +262,4 @@ auto config_manager::find(const std::source_location loc) const -> config_handle
   return config_handle<T>{std::static_pointer_cast<detail::section<T>>(registration.section), registration.document};
 }
 
-///
-///
-inline auto config_manager::contains(const std::string_view location) const -> bool
-{
-  const auto lock = std::shared_lock{mutex_};
-
-  return documents_.contains(std::string{location});
-}
-
-///
-///
-inline auto config_manager::size() const -> std::size_t
-{
-  const auto lock = std::shared_lock{mutex_};
-
-  return documents_.size();
-}
-
-///
-///
-inline auto config_manager::load_all(const load_policy policy, const std::source_location loc) -> void
-{
-  std::vector<std::shared_ptr<detail::document_base>> documents;
-
-  {
-    const auto lock = std::shared_lock{mutex_};
-
-    for(const auto& [location, document] : documents_)
-    {
-      documents.push_back(document);
-    }
-  }
-
-  for(const auto& document : documents)
-  {
-    document->load(policy, loc);
-  }
-}
-
 } // namespace arude::config

@@ -17,7 +17,10 @@
 
 #include <array>
 #include <cstddef>
+#include <exception>
 #include <string_view>
+#include <tuple>
+#include <type_traits>
 
 namespace
 {
@@ -178,6 +181,55 @@ SCENARIO("text that is not a configuration says so", "[config][toml]")
     THEN("it is refused rather than assumed to be version zero")
     {
       REQUIRE_THROWS_AS(arude::config::toml_version(text), arude::exception_base);
+    }
+  }
+}
+
+// toml_version() is compiled into the library, so the exception it throws is
+// built with the library's exception base. Arriving as the type this file was
+// compiled to expect, in a build with either base, shows the two agree.
+SCENARIO("a failure inside the library is the exception the caller compiled", "[config][toml]")
+{
+  GIVEN("text that is not TOML")
+  {
+    static constexpr auto text = std::string_view{"{ this is not toml"};
+
+    WHEN("the library fails to read it")
+    {
+      auto caught_as_std = false;
+      auto caught_as_arude = false;
+
+      try
+      {
+        std::ignore = arude::config::toml_version(text);
+      }
+      catch(const std::exception&)
+      {
+        caught_as_std = true;
+      }
+      catch(...)
+      {
+        caught_as_std = false;
+      }
+
+      try
+      {
+        std::ignore = arude::config::toml_version(text);
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        caught_as_arude = ex.data() == arude::config::config_error::invalid_payload;
+      }
+
+      THEN("it is the configuration's own exception")
+      {
+        REQUIRE(caught_as_arude);
+      }
+
+      THEN("a std::exception handler sees it exactly when the exception base is std::runtime_error")
+      {
+        REQUIRE(caught_as_std == std::is_base_of_v<std::exception, arude::exception_base>);
+      }
     }
   }
 }

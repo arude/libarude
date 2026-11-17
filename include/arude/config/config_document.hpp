@@ -375,13 +375,6 @@ private: // Variables
 
 ///
 ///
-inline auto section_label(const std::string_view name) -> std::string
-{
-  return name.empty() ? std::string{"the root section"} : std::format("section '{}'", name);
-}
-
-///
-///
 template<configuration_c T>
 section<T>::section(const std::string_view name)
   : name_{name}
@@ -1003,48 +996,6 @@ public: // Methods
 private: // Variables
   std::shared_ptr<detail::document_base> document_;
 };
-
-///
-///
-inline config_document_handle::config_document_handle(std::shared_ptr<detail::document_base> document)
-  : document_{std::move(document)}
-{
-}
-
-///
-///
-inline auto config_document_handle::location() const -> std::string
-{
-  return document_->location();
-}
-
-///
-///
-inline auto config_document_handle::writable() const -> bool
-{
-  return document_->writable();
-}
-
-///
-///
-inline auto config_document_handle::load(const load_policy policy, const std::source_location loc) -> void
-{
-  document_->load(policy, loc);
-}
-
-///
-///
-inline auto config_document_handle::store(const std::source_location loc) -> void
-{
-  document_->store(loc);
-}
-
-///
-///
-inline auto config_document_handle::discard_source() -> void
-{
-  document_->discard_source();
-}
 
 ///
 ///

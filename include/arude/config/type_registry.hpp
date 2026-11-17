@@ -103,6 +103,13 @@ private: // Variables
   std::unordered_map<type_key_t, type_entry> types_; // Keyed by type_key<T>().
 };
 
+// Defined here rather than in src/config, unlike the rest of the configuration
+// support: type_key_t is std::type_index with RTTI and a pointer wrapper
+// without, so both members' signatures and the map behind them follow the RTTI
+// setting of whoever compiles them. Kept inline, they are always compiled with
+// the consumer's setting, so one built with -fno-rtti against a library built
+// with RTTI still links and still finds what it registered.
+
 ///
 ///
 inline auto type_registry::add(

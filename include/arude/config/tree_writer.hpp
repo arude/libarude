@@ -283,7 +283,8 @@ public: // Methods
   ///
   /// \return Nothing.
   ///
-  [[nodiscard]] auto null_as_root() const noexcept -> OutputVarType;
+  // NOLINTNEXTLINE(readability-convert-member-functions-to-static): reflect-cpp calls it on an instance.
+  [[nodiscard]] auto null_as_root() const noexcept -> OutputVarType { return {}; }
 
   ///
   /// Required by rfl::parsing::IsWriter. A configuration is a table, so
@@ -380,13 +381,15 @@ public: // Methods
   /// Marks the end of an array, which needs nothing doing.
   /// \param array The array.
   ///
-  auto end_array(OutputArrayType* array) const noexcept -> void;
+  // NOLINTNEXTLINE(readability-convert-member-functions-to-static): reflect-cpp calls it on an instance.
+  auto end_array([[maybe_unused]] OutputArrayType* array) const noexcept -> void {}
 
   ///
   /// Marks the end of a table, which needs nothing doing.
   /// \param object The table.
   ///
-  auto end_object(OutputObjectType* object) const noexcept -> void;
+  // NOLINTNEXTLINE(readability-convert-member-functions-to-static): reflect-cpp calls it on an instance.
+  auto end_object([[maybe_unused]] OutputObjectType* object) const noexcept -> void {}
 
 private: // Helpers
   ///
@@ -433,36 +436,10 @@ private: // Variables
 
 ///
 ///
-inline rfl_tree_writer::rfl_tree_writer(
-  tree_writer& tree, const tree_branch target, key_set_t& written, std::exception_ptr& failure)
-  : tree_{&tree}
-  , target_{target}
-  , written_{&written}
-  , failure_{&failure}
-{
-}
-
-///
-///
 template<typename T>
 auto rfl_tree_writer::array_as_root([[maybe_unused]] const T size) const noexcept -> OutputArrayType
 {
   static_assert(rfl::always_false_v<T>, "A configuration is a table, so it is never written as an array.");
-  return {};
-}
-
-///
-///
-inline auto rfl_tree_writer::object_as_root([[maybe_unused]] const std::size_t size) const noexcept -> OutputObjectType
-{
-  return {.branch = target_, .top = true};
-}
-
-///
-///
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static): reflect-cpp calls it on an instance.
-inline auto rfl_tree_writer::null_as_root() const noexcept -> OutputVarType
-{
   return {};
 }
 
@@ -473,52 +450,6 @@ auto rfl_tree_writer::value_as_root([[maybe_unused]] const T& var) const noexcep
 {
   static_assert(rfl::always_false_v<T>, "A configuration is a table, so it is never written as a value.");
   return {};
-}
-
-///
-///
-inline auto rfl_tree_writer::add_array_to_array(
-  [[maybe_unused]] const std::size_t size, OutputArrayType* const parent) const noexcept -> OutputArrayType
-{
-  return shielded<OutputArrayType>(
-    [this, parent] -> OutputArrayType { return {.branch = tree_->append_array(parent->branch)}; });
-}
-
-///
-///
-inline auto rfl_tree_writer::add_array_to_object(
-  const std::string_view name, [[maybe_unused]] const std::size_t size, OutputObjectType* const parent) const noexcept
-  -> OutputArrayType
-{
-  return shielded<OutputArrayType>(
-    [this, name, parent] -> OutputArrayType
-    {
-      claim(name, *parent);
-      return {.branch = tree_->add_array(parent->branch, name)};
-    });
-}
-
-///
-///
-inline auto rfl_tree_writer::add_object_to_array(
-  [[maybe_unused]] const std::size_t size, OutputArrayType* const parent) const noexcept -> OutputObjectType
-{
-  return shielded<OutputObjectType>(
-    [this, parent] -> OutputObjectType { return {.branch = tree_->append_table(parent->branch)}; });
-}
-
-///
-///
-inline auto rfl_tree_writer::add_object_to_object(
-  const std::string_view name, [[maybe_unused]] const std::size_t size, OutputObjectType* const parent) const noexcept
-  -> OutputObjectType
-{
-  return shielded<OutputObjectType>(
-    [this, name, parent] -> OutputObjectType
-    {
-      claim(name, *parent);
-      return {.branch = tree_->add_table(parent->branch, name)};
-    });
 }
 
 ///
@@ -551,46 +482,6 @@ auto rfl_tree_writer::add_value_to_object(
 
 ///
 ///
-inline auto rfl_tree_writer::add_null_to_array(OutputArrayType* const parent) const noexcept -> OutputVarType
-{
-  return shielded<OutputVarType>(
-    [this, parent] -> OutputVarType
-    {
-      tree_->append_null(parent->branch);
-      return {};
-    });
-}
-
-///
-///
-inline auto rfl_tree_writer::add_null_to_object(
-  const std::string_view name, OutputObjectType* const parent) const noexcept -> OutputVarType
-{
-  return shielded<OutputVarType>(
-    [this, name, parent] -> OutputVarType
-    {
-      claim(name, *parent);
-      tree_->add_null(parent->branch, name);
-      return {};
-    });
-}
-
-///
-///
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static): reflect-cpp calls it on an instance.
-inline auto rfl_tree_writer::end_array([[maybe_unused]] OutputArrayType* const array) const noexcept -> void
-{
-}
-
-///
-///
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static): reflect-cpp calls it on an instance.
-inline auto rfl_tree_writer::end_object([[maybe_unused]] OutputObjectType* const object) const noexcept -> void
-{
-}
-
-///
-///
 template<typename T>
 auto rfl_tree_writer::to_scalar(const T& var) -> tree_scalar_t
 {
@@ -618,19 +509,6 @@ auto rfl_tree_writer::to_scalar(const T& var) -> tree_scalar_t
   {
     static_assert(rfl::always_false_v<T>, "reflect-cpp wrote a basic type that a tree_writer does not take.");
   }
-}
-
-///
-///
-inline auto rfl_tree_writer::claim(const std::string_view name, const OutputObjectType& parent) const -> void
-{
-  if(!parent.top)
-  {
-    return;
-  }
-
-  tree_->erase(parent.branch, name);
-  written_->emplace(name);
 }
 
 ///

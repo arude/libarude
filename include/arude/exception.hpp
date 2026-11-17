@@ -96,6 +96,10 @@ namespace arude::detail
 /// is constructed from the message, so exception_base initialises it the same
 /// way in both configurations.
 ///
+/// The library is compiled with the setting too, so a consumer that uses the
+/// configuration support sets it through the CMake option of the same name
+/// rather than defining the macro for itself; a mismatch fails to link.
+///
 #if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
 
 using std_runtime_error_base_t = std::runtime_error;
