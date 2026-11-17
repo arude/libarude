@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <source_location>
 #include <span>
 #include <string>
 #include <string_view>
@@ -93,14 +94,17 @@ struct base64_group
 ///
 /// \param group The four characters.
 /// \param last Whether this is the last group of the text, which is the only one padding may appear in.
+/// \param loc Where base64_decode() was called, which is what a failure reports.
 /// \return The bits the group carries, and how much of it was padding.
 /// \throws arude::exception If the group holds a character outside the alphabet, or misplaced padding.
 ///
-[[nodiscard]] constexpr auto decode_base64_group(std::string_view group, bool last) -> base64_group;
+[[nodiscard]] constexpr auto decode_base64_group(std::string_view group, bool last, std::source_location loc)
+  -> base64_group;
 
 ///
 ///
-constexpr auto decode_base64_group(const std::string_view group, const bool last) -> base64_group
+constexpr auto decode_base64_group(const std::string_view group, const bool last, const std::source_location loc)
+  -> base64_group
 {
   auto decoded = base64_group{};
 
@@ -112,7 +116,7 @@ constexpr auto decode_base64_group(const std::string_view group, const bool last
       // characters, and never before the third position of that group.
       if(!last || decoded.padding == 2)
       {
-        throw exception{"arude::config: base64 padding outside the last two characters of the text."};
+        throw exception<>{"arude::config: base64 padding outside the last two characters of the text.", loc};
       }
 
       ++decoded.padding;
@@ -120,7 +124,7 @@ constexpr auto decode_base64_group(const std::string_view group, const bool last
     }
     else if(decoded.padding != 0)
     {
-      throw exception{"arude::config: base64 padding followed by further data."};
+      throw exception<>{"arude::config: base64 padding followed by further data.", loc};
     }
     else
     {
@@ -128,7 +132,7 @@ constexpr auto decode_base64_group(const std::string_view group, const bool last
 
       if(value == base64_invalid)
       {
-        throw exception{std::format("arude::config: '{}' is not a base64 character.", character)};
+        throw exception<>{std::format("arude::config: '{}' is not a base64 character.", character), loc};
       }
 
       decoded.bits = (decoded.bits << 6U) | static_cast<std::uint32_t>(value);
@@ -209,10 +213,12 @@ using base64_span_t = std::span<const base64_byte_t>;
 /// line breaks are not accepted, because base64_encode() never produces any.
 ///
 /// \param text Encoded text.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
 /// \return The decoded bytes.
 /// \throws arude::exception If the text is not valid base64.
 ///
-[[nodiscard]] constexpr auto base64_decode(base64_view_t text) -> base64_bytes_t;
+[[nodiscard]] constexpr auto
+base64_decode(base64_view_t text, std::source_location loc = std::source_location::current()) -> base64_bytes_t;
 
 ///
 ///
@@ -274,12 +280,12 @@ constexpr auto base64_encode(const base64_span_t data) -> base64_string_t
 
 ///
 ///
-constexpr auto base64_decode(const base64_view_t text) -> base64_bytes_t
+constexpr auto base64_decode(const base64_view_t text, const std::source_location loc) -> base64_bytes_t
 {
   if(text.size() % 4 != 0)
   {
-    throw exception{
-      std::format("arude::config: base64 text of length {} is not a multiple of four characters.", text.size())};
+    throw exception<>{
+      std::format("arude::config: base64 text of length {} is not a multiple of four characters.", text.size()), loc};
   }
 
   auto data = base64_bytes_t{};
@@ -289,7 +295,7 @@ constexpr auto base64_decode(const base64_view_t text) -> base64_bytes_t
   // the last group carries.
   for(auto pos = decltype(text.size()){0}; pos < text.size(); pos += 4)
   {
-    const auto group = detail::decode_base64_group(text.substr(pos, 4), pos + 4 == text.size());
+    const auto group = detail::decode_base64_group(text.substr(pos, 4), pos + 4 == text.size(), loc);
 
     data.push_back(static_cast<base64_byte_t>((group.bits >> 16U) & 0xFFU));
 

@@ -12,6 +12,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <exception>
 #include <expected>
 #include <format>
@@ -396,6 +397,117 @@ SCENARIO("exception_report accepts an exception_ptr", "[exception_report]")
     THEN("the report says so rather than dereferencing it")
     {
       REQUIRE(report.contains("must be called with a valid exception_ptr"));
+    }
+  }
+}
+
+SCENARIO("exception_message returns the message alone", "[exception_report]")
+{
+  GIVEN("exceptions of every kind the helper names")
+  {
+    THEN("each yields its own text and nothing of a report")
+    {
+      const auto message_of = [](auto value) -> arude::exception_string_t
+      {
+        try
+        {
+          // Throwing a raw pointer is one of the cases under test, as for
+          // exception_report above.
+          // NOLINTNEXTLINE(misc-throw-by-value-catch-by-reference)
+          throw value;
+        }
+        catch(...)
+        {
+          return arude::exception_message();
+        }
+      };
+
+      REQUIRE(message_of(arude::exception{"arude failure"}) == "arude failure");
+      REQUIRE(message_of(arude::exception{"with payload", 42}) == "with payload");
+      REQUIRE(message_of(std::runtime_error{"std failure"}) == "std failure");
+      REQUIRE(message_of("literal failure") == "literal failure");
+      REQUIRE(message_of(static_cast<const char*>(nullptr)) == "Unknown exception");
+      REQUIRE(message_of(unrecognised_payload{}) == "Unknown exception");
+      REQUIRE(message_of('x') == "x");
+      REQUIRE(message_of(static_cast<short>(7)) == "7");
+      REQUIRE(message_of(42) == "42");
+      REQUIRE(message_of(1.5F) == "1.5");
+      REQUIRE(message_of(2.5) == "2.5");
+    }
+  }
+
+  GIVEN("an arude exception nested inside another")
+  {
+    WHEN("its message is asked for")
+    {
+      auto message = arude::exception_string_t{};
+
+      try
+      {
+        throw_nested_arude();
+      }
+      catch(...)
+      {
+        message = arude::exception_message();
+      }
+
+      THEN("the outer message comes first and the nested one after it, with no location or stacktrace")
+      {
+        REQUIRE(message == "outer arude: inner arude");
+      }
+    }
+  }
+
+  GIVEN("a chain of nested std exceptions")
+  {
+    WHEN("its message is asked for")
+    {
+      auto message = arude::exception_string_t{};
+
+      try
+      {
+        throw_nested_runtime(2);
+      }
+      catch(...)
+      {
+        message = arude::exception_message();
+      }
+
+      THEN("every level's message is there, outermost first")
+      {
+        REQUIRE(message == "level 2: level 1: innermost");
+      }
+    }
+  }
+
+  GIVEN("a chain nested deeper than the depth limit")
+  {
+    WHEN("its message is asked for")
+    {
+      auto message = arude::exception_string_t{};
+
+      try
+      {
+        throw_nested_runtime(deep_nesting);
+      }
+      catch(...)
+      {
+        message = arude::exception_message();
+      }
+
+      THEN("it stops at the limit rather than walking the whole chain")
+      {
+        REQUIRE(std::ranges::count(message, ':') == ARUDE_EXCEPTION_REPORT_MAX_DEPTH - 1);
+        REQUIRE(!message.contains("innermost"));
+      }
+    }
+  }
+
+  GIVEN("no exception in flight")
+  {
+    THEN("the helper says so rather than failing")
+    {
+      REQUIRE(arude::exception_message() == "No exception is being handled");
     }
   }
 }

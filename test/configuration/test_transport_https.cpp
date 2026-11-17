@@ -38,6 +38,7 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -942,6 +943,108 @@ SCENARIO("a redirect's Location is resolved against the URL that answered", "[co
       REQUIRE(resolve_redirect(base, "ftp://example.com/a").error() == https_url_error::not_https);
       REQUIRE(resolve_redirect(base, "javascript:alert(1)").error() == https_url_error::not_https);
       REQUIRE(resolve_redirect(base, "https://user:pw@example.com/").error() == https_url_error::userinfo);
+    }
+  }
+}
+
+// A defaulted trailing std::source_location leaves the nullary forms
+// transport_c asks for callable.
+static_assert(arude::config::transport_c<arude::config::transport_https>);
+
+SCENARIO("an https transport reports a failure where it was called", "[config][transport][transport_https]")
+{
+  using arude::config::config_error;
+  using arude::config::transport_https;
+
+  GIVEN("a URL that is not https")
+  {
+    WHEN("a transport is constructed for it")
+    {
+      auto failure = std::optional<arude::config::exception_t>{};
+      auto before = std::source_location{};
+
+      try
+      {
+        before = std::source_location::current();
+        std::ignore = transport_https{"http://example.com/app.toml"};
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        failure = ex;
+      }
+
+      THEN("it is an invalid_location raised at the construction")
+      {
+        REQUIRE(failure.has_value());
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+        REQUIRE(failure->data() == config_error::invalid_location);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+        REQUIRE(std::string_view{failure->where().file_name()} == std::string_view{before.file_name()});
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+        REQUIRE(failure->where().line() == before.line() + 1);
+      }
+    }
+  }
+
+  GIVEN("a URL that is not https, with the options spelled as {}")
+  {
+    WHEN("a transport is constructed for it")
+    {
+      auto failure = std::optional<arude::config::exception_t>{};
+      auto before = std::source_location{};
+
+      try
+      {
+        before = std::source_location::current();
+        std::ignore = transport_https{"http://example.com/app.toml", {}};
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        failure = ex;
+      }
+
+      THEN("{} names the default options and the failure is still raised at the construction")
+      {
+        REQUIRE(failure.has_value());
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+        REQUIRE(failure->data() == config_error::invalid_location);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+        REQUIRE(std::string_view{failure->where().file_name()} == std::string_view{before.file_name()});
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+        REQUIRE(failure->where().line() == before.line() + 1);
+      }
+    }
+  }
+
+  GIVEN("a transport left read-only")
+  {
+    const auto transport = transport_https{"https://example.com/app.toml"};
+
+    WHEN("it is written")
+    {
+      auto failure = std::optional<arude::config::exception_t>{};
+      auto before = std::source_location{};
+
+      try
+      {
+        before = std::source_location::current();
+        transport.write(arude::config::as_bytes("new contents\n"));
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        failure = ex;
+      }
+
+      THEN("it is a read_only raised at the write")
+      {
+        REQUIRE(failure.has_value());
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+        REQUIRE(failure->data() == config_error::read_only);
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+        REQUIRE(std::string_view{failure->where().file_name()} == std::string_view{before.file_name()});
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access): the REQUIRE above checks it.
+        REQUIRE(failure->where().line() == before.line() + 1);
+      }
     }
   }
 }

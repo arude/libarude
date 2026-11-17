@@ -21,6 +21,7 @@
 #include <iterator>
 #include <optional>
 #include <random>
+#include <source_location>
 #include <span>
 #include <string>
 #include <string_view>
@@ -42,13 +43,15 @@ namespace arude::config::detail
 /// and where the read finds nothing, to tell an empty file from a directory.
 ///
 /// \param path File to read.
+/// \param loc The call site a failure reports.
 /// \return The contents of the file, or std::nullopt where there is no file
 ///         at the path: nothing of that name, a directory on the way that is
 ///         missing or is not a directory, or a symbolic link to nothing.
 /// \throws exception_t With io_error if there is something at the path and it
 ///                     cannot be opened or read, a directory among them.
 ///
-[[nodiscard]] auto read_file(const std::filesystem::path& path) -> std::optional<std::vector<std::byte>>;
+[[nodiscard]] auto read_file(const std::filesystem::path& path, std::source_location loc)
+  -> std::optional<std::vector<std::byte>>;
 
 ///
 /// Returns a path beside a file for a write to go to before it replaces the file.
@@ -76,15 +79,17 @@ namespace arude::config::detail
 ///
 /// \param path File to write.
 /// \param bytes Bytes to write. Not retained.
+/// \param loc The call site a failure reports.
 /// \throws exception_t With io_error if the file cannot be opened, written or
 ///                     replaced. The file is unchanged then, and no
 ///                     temporary file is left behind.
 ///
-auto write_file(const std::filesystem::path& path, std::span<const std::byte> bytes) -> void;
+auto write_file(const std::filesystem::path& path, std::span<const std::byte> bytes, std::source_location loc) -> void;
 
 ///
 ///
-inline auto read_file(const std::filesystem::path& path) -> std::optional<std::vector<std::byte>>
+inline auto read_file(const std::filesystem::path& path, const std::source_location loc)
+  -> std::optional<std::vector<std::byte>>
 {
   auto stream = std::ifstream{path, std::ios::binary};
 
@@ -102,7 +107,7 @@ inline auto read_file(const std::filesystem::path& path) -> std::optional<std::v
     }
 
     throw exception_t{
-      std::format("arude::config: cannot open '{}' for reading.", path.string()), config_error::io_error};
+      std::format("arude::config: cannot open '{}' for reading.", path.string()), config_error::io_error, loc};
   }
 
   try
@@ -118,7 +123,7 @@ inline auto read_file(const std::filesystem::path& path) -> std::optional<std::v
        stream.bad() || (text.empty() && std::filesystem::is_directory(path, unexamined)))
     {
       throw exception_t{
-        std::format("arude::config: failed while reading '{}'.", path.string()), config_error::io_error};
+        std::format("arude::config: failed while reading '{}'.", path.string()), config_error::io_error, loc};
     }
 
     return as_bytes(text);
@@ -130,8 +135,9 @@ inline auto read_file(const std::filesystem::path& path) -> std::optional<std::v
   catch(...)
   {
     throw exception_t{
-      std::format("arude::config: failed while reading '{}': {}", path.string(), exception_report()),
-      config_error::io_error};
+      std::format("arude::config: failed while reading '{}': {}", path.string(), exception_message()),
+      config_error::io_error,
+      loc};
   }
 }
 
@@ -153,7 +159,8 @@ inline auto temporary_sibling(const std::filesystem::path& path) -> std::filesys
 
 ///
 ///
-inline auto write_file(const std::filesystem::path& path, const std::span<const std::byte> bytes) -> void
+inline auto write_file(
+  const std::filesystem::path& path, const std::span<const std::byte> bytes, const std::source_location loc) -> void
 {
   auto target = path;
 
@@ -171,7 +178,8 @@ inline auto write_file(const std::filesystem::path& path, const std::span<const 
     {
       throw exception_t{
         std::format("arude::config: cannot resolve the link '{}': {}", path.string(), error.message()),
-        config_error::io_error};
+        config_error::io_error,
+        loc};
     }
   }
 
@@ -184,7 +192,7 @@ inline auto write_file(const std::filesystem::path& path, const std::span<const 
     if(!stream.is_open())
     {
       throw exception_t{
-        std::format("arude::config: cannot open '{}' for writing.", temporary.string()), config_error::io_error};
+        std::format("arude::config: cannot open '{}' for writing.", temporary.string()), config_error::io_error, loc};
     }
 
     // Before anything is written, so contents the old file kept private are
@@ -204,7 +212,7 @@ inline auto write_file(const std::filesystem::path& path, const std::span<const 
     if(stream.fail())
     {
       throw exception_t{
-        std::format("arude::config: failed while writing '{}'.", temporary.string()), config_error::io_error};
+        std::format("arude::config: failed while writing '{}'.", temporary.string()), config_error::io_error, loc};
     }
 
     auto error = std::error_code{};
@@ -214,7 +222,8 @@ inline auto write_file(const std::filesystem::path& path, const std::span<const 
     {
       throw exception_t{
         std::format("arude::config: cannot replace '{}': {}", target.string(), error.message()),
-        config_error::io_error};
+        config_error::io_error,
+        loc};
     }
   }
   catch(...)
@@ -288,25 +297,29 @@ public: // Accessors
   ///
   /// Reads the bytes at the path, in one step. See detail::read_file.
   ///
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \return The bytes, exactly as stored, or std::nullopt where there is no
   ///         file at the path, which is the source that load_policy::create
   ///         gives defaults for.
   /// \throws exception_t With io_error if there is something at the path and
   ///                     it cannot be read.
   ///
-  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
+  [[nodiscard]] auto read(std::source_location loc = std::source_location::current()) const
+    -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   ///
   /// Writes bytes to the path, replacing whatever was there in one step.
   ///
   /// \param bytes Bytes to write. Not retained.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \throws exception_t With io_error if the write fails, which leaves the
   ///                     file as it was.
   /// \throws std::filesystem::filesystem_error If the directories leading to
   ///                                          the file cannot be created.
   ///
-  auto write(std::span<const std::byte> bytes) const -> void;
+  auto write(std::span<const std::byte> bytes, std::source_location loc = std::source_location::current()) const
+    -> void;
 
 private: // Variables
   std::filesystem::path path_;
@@ -344,21 +357,21 @@ inline auto transport_file::writable() const -> bool
 
 ///
 ///
-inline auto transport_file::read() const -> std::optional<std::vector<std::byte>>
+inline auto transport_file::read(const std::source_location loc) const -> std::optional<std::vector<std::byte>>
 {
-  return detail::read_file(path_);
+  return detail::read_file(path_, loc);
 }
 
 ///
 ///
-inline auto transport_file::write(const std::span<const std::byte> bytes) const -> void
+inline auto transport_file::write(const std::span<const std::byte> bytes, const std::source_location loc) const -> void
 {
   if(const auto parent = path_.parent_path(); !parent.empty())
   {
     std::filesystem::create_directories(parent);
   }
 
-  detail::write_file(path_, bytes);
+  detail::write_file(path_, bytes, loc);
 }
 
 } // namespace arude::config

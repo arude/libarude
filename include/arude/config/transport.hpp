@@ -40,6 +40,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <source_location>
 #include <span>
 #include <string>
 #include <string_view>
@@ -61,6 +62,11 @@ namespace arude::config
 /// as std::nullopt. load_policy::create would then hand out defaults for a
 /// source that is there but could not be read, and the next store() would
 /// overwrite it with them.
+///
+/// read() and write() may take a trailing std::source_location as well, which
+/// is the call site a failure should report. A transport that takes one is
+/// handed it, through detail::read_from() and detail::write_to(); it still has
+/// to be callable without one, and so has to default it.
 ///
 /// \tparam Tr Type to test.
 ///
@@ -86,3 +92,62 @@ concept path_transport_c = transport_c<Tr> && requires(const Tr& carrier) {
 };
 
 } // namespace arude::config
+
+namespace arude::config::detail
+{
+
+///
+/// Reads through a transport, handing it the call site where it takes one.
+///
+/// \tparam Tr Transport type.
+/// \param carrier The transport.
+/// \param loc The call site a failure should report.
+/// \return Whatever the transport's read() returns.
+/// \throws Whatever the transport's read() throws.
+///
+template<transport_c Tr>
+[[nodiscard]] auto read_from(const Tr& carrier, std::source_location loc) -> std::optional<std::vector<std::byte>>;
+
+///
+/// Writes through a transport, handing it the call site where it takes one.
+///
+/// \tparam Tr Transport type.
+/// \param carrier The transport.
+/// \param bytes Bytes to write. Not retained.
+/// \param loc The call site a failure should report.
+/// \throws Whatever the transport's write() throws.
+///
+template<transport_c Tr>
+auto write_to(const Tr& carrier, std::span<const std::byte> bytes, std::source_location loc) -> void;
+
+///
+///
+template<transport_c Tr>
+auto read_from(const Tr& carrier, const std::source_location loc) -> std::optional<std::vector<std::byte>>
+{
+  if constexpr(requires { carrier.read(loc); })
+  {
+    return carrier.read(loc);
+  }
+  else
+  {
+    return carrier.read();
+  }
+}
+
+///
+///
+template<transport_c Tr>
+auto write_to(const Tr& carrier, const std::span<const std::byte> bytes, const std::source_location loc) -> void
+{
+  if constexpr(requires { carrier.write(bytes, loc); })
+  {
+    carrier.write(bytes, loc);
+  }
+  else
+  {
+    carrier.write(bytes);
+  }
+}
+
+} // namespace arude::config::detail

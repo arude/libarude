@@ -52,6 +52,7 @@
 #include <filesystem>
 #include <format>
 #include <optional>
+#include <source_location>
 #include <span>
 #include <string>
 #include <string_view>
@@ -450,27 +451,23 @@ class transport_https final
 {
 public: // Structors
   ///
-  /// Constructs a transport for the URL given, with the default options.
-  ///
-  /// \param url URL the configuration lives at. Must begin with https:// and carry no userinfo.
-  /// \throws exception_t With invalid_location if the URL does not begin with
-  ///                     https://, carries userinfo, or has no host, a port
-  ///                     outside 1 to 65535, or a malformed IPv6 literal. The
-  ///                     message leaves anything that might be userinfo out.
-  ///
-  explicit transport_https(std::string_view url);
-
-  ///
   /// Constructs a transport for the URL given, with the options given.
+  /// One constructor rather than a URL-only overload beside it, so that
+  /// transport_https{url, {}} names the default options rather than being
+  /// ambiguous with the location.
   ///
   /// \param url URL the configuration lives at. Must begin with https:// and carry no userinfo.
-  /// \param options How it should behave. Copied.
+  /// \param options How it should behave. Copied. Defaults to transport_https_options{}.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \throws exception_t With invalid_location if the URL does not begin with
   ///                     https://, carries userinfo, or has no host, a port
   ///                     outside 1 to 65535, or a malformed IPv6 literal. The
   ///                     message leaves anything that might be userinfo out.
   ///
-  transport_https(std::string_view url, transport_https_options options);
+  explicit transport_https(
+    std::string_view url,
+    transport_https_options options = {},
+    std::source_location loc = std::source_location::current());
 
 public: // Accessors
   ///
@@ -496,6 +493,7 @@ public: // Accessors
   /// Location names, resolved against the URL that answered, up to
   /// transport_https_options::redirect_limit of them.
   ///
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \return The bytes, exactly as served, or std::nullopt where the server
   ///         answers 404 or 410, which is the source that load_policy::create
   ///         gives defaults for.
@@ -504,7 +502,8 @@ public: // Accessors
   ///                     if a redirect has no Location, leads anywhere but an
   ///                     https URL, or goes beyond the limit.
   ///
-  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
+  [[nodiscard]] auto read(std::source_location loc = std::source_location::current()) const
+    -> std::optional<std::vector<std::byte>>;
 
 public: // Methods
   ///
@@ -512,21 +511,24 @@ public: // Methods
   /// A redirect is not followed.
   ///
   /// \param bytes Bytes to write. Not retained.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \throws exception_t With read_only if the transport is read-only, or
   ///                     io_error if the write fails or the server answers
   ///                     with any status outside 2xx, a redirect included.
   ///
-  auto write(std::span<const std::byte> bytes) const -> void;
+  auto write(std::span<const std::byte> bytes, std::source_location loc = std::source_location::current()) const
+    -> void;
 
 private: // Helpers
   ///
   /// Makes a client for an origin, with the options applied.
   ///
   /// \param origin Origin to connect to, as detail::https_url carries it.
+  /// \param loc The call site a failure reports.
   /// \return The client, not yet connected.
   /// \throws exception_t With io_error if httplib cannot make a client for the origin.
   ///
-  [[nodiscard]] auto connect(const std::string& origin) const -> httplib::Client;
+  [[nodiscard]] auto connect(const std::string& origin, std::source_location loc) const -> httplib::Client;
 
   ///
   /// Works out where a redirect leads, or refuses to follow it.
@@ -534,13 +536,17 @@ private: // Helpers
   /// \param from URL that answered with the redirect.
   /// \param response The answer, carrying the Location.
   /// \param followed How many redirects the read has followed before this one.
+  /// \param loc The call site a failure reports.
   /// \return Where to send the next request.
   /// \throws exception_t With io_error if the answer has no Location, if it
   ///                     leads anywhere but an https URL, or if following it
   ///                     would exceed the redirect limit.
   ///
   [[nodiscard]] auto redirect(
-    const detail::https_url& from, const httplib::Response& response, std::size_t followed) const -> detail::https_url;
+    const detail::https_url& from,
+    const httplib::Response& response,
+    std::size_t followed,
+    std::source_location loc) const -> detail::https_url;
 
 private: // Variables
   std::string url_;
@@ -550,14 +556,8 @@ private: // Variables
 
 ///
 ///
-inline transport_https::transport_https(const std::string_view url)
-  : transport_https{url, transport_https_options{}}
-{
-}
-
-///
-///
-inline transport_https::transport_https(const std::string_view url, transport_https_options options)
+inline transport_https::transport_https(
+  const std::string_view url, transport_https_options options, const std::source_location loc)
   : url_{url}
   , options_{std::move(options)}
 {
@@ -567,7 +567,8 @@ inline transport_https::transport_https(const std::string_view url, transport_ht
   {
     throw exception_t{
       std::format("arude::config: '{}' {}.", detail::without_userinfo(url_), detail::describe(parts.error())),
-      config_error::invalid_location};
+      config_error::invalid_location,
+      loc};
   }
 
   parts_ = std::move(*parts);
@@ -589,7 +590,7 @@ inline auto transport_https::writable() const -> bool
 
 ///
 ///
-inline auto transport_https::read() const -> std::optional<std::vector<std::byte>>
+inline auto transport_https::read(const std::source_location loc) const -> std::optional<std::vector<std::byte>>
 {
   auto at = parts_;
 
@@ -603,19 +604,20 @@ inline auto transport_https::read() const -> std::optional<std::vector<std::byte
                            : std::format("'{}', redirected to '{}{}',", url_, at.origin, at.target);
     };
 
-    auto client = connect(at.origin);
+    auto client = connect(at.origin, loc);
     const auto result = client.Get(at.target);
 
     if(!result)
     {
       throw exception_t{
         std::format("arude::config: {} could not be reached: {}", where(), httplib::to_string(result.error())),
-        config_error::io_error};
+        config_error::io_error,
+        loc};
     }
 
     if(detail::is_redirect(result->status))
     {
-      at = redirect(at, *result, followed);
+      at = redirect(at, *result, followed, loc);
       continue;
     }
 
@@ -630,7 +632,8 @@ inline auto transport_https::read() const -> std::optional<std::vector<std::byte
 
     if(result->status < 200 || result->status >= 300)
     {
-      throw exception_t{std::format("arude::config: {} answered {}.", where(), result->status), config_error::io_error};
+      throw exception_t{
+        std::format("arude::config: {} answered {}.", where(), result->status), config_error::io_error, loc};
     }
 
     return as_bytes(result->body);
@@ -639,21 +642,23 @@ inline auto transport_https::read() const -> std::optional<std::vector<std::byte
 
 ///
 ///
-inline auto transport_https::write(const std::span<const std::byte> bytes) const -> void
+inline auto transport_https::write(const std::span<const std::byte> bytes, const std::source_location loc) const -> void
 {
   if(!writable())
   {
-    throw exception_t{std::format("arude::config: the '{}' transport is read-only.", name), config_error::read_only};
+    throw exception_t{
+      std::format("arude::config: the '{}' transport is read-only.", name), config_error::read_only, loc};
   }
 
-  auto client = connect(parts_.origin);
+  auto client = connect(parts_.origin, loc);
   const auto result = client.Put(parts_.target, as_text(bytes), options_.content_type);
 
   if(!result)
   {
     throw exception_t{
       std::format("arude::config: '{}' could not be written: {}", url_, httplib::to_string(result.error())),
-      config_error::io_error};
+      config_error::io_error,
+      loc};
   }
 
   // Not followed: a PUT replayed at an address the server names is a write the
@@ -663,19 +668,20 @@ inline auto transport_https::write(const std::span<const std::byte> bytes) const
     throw exception_t{
       std::format(
         "arude::config: '{}' answered {} to the write, and a write does not follow redirects.", url_, result->status),
-      config_error::io_error};
+      config_error::io_error,
+      loc};
   }
 
   if(result->status < 200 || result->status >= 300)
   {
     throw exception_t{
-      std::format("arude::config: '{}' answered {} to the write.", url_, result->status), config_error::io_error};
+      std::format("arude::config: '{}' answered {} to the write.", url_, result->status), config_error::io_error, loc};
   }
 }
 
 ///
 ///
-inline auto transport_https::connect(const std::string& origin) const -> httplib::Client
+inline auto transport_https::connect(const std::string& origin, const std::source_location loc) const -> httplib::Client
 {
   auto client = httplib::Client{origin};
 
@@ -685,7 +691,8 @@ inline auto transport_https::connect(const std::string& origin) const -> httplib
   {
     throw exception_t{
       std::format("arude::config: '{}' could not be reached: httplib cannot connect to '{}'.", url_, origin),
-      config_error::io_error};
+      config_error::io_error,
+      loc};
   }
 
   client.set_connection_timeout(options_.timeout);
@@ -706,8 +713,10 @@ inline auto transport_https::connect(const std::string& origin) const -> httplib
 ///
 ///
 inline auto transport_https::redirect(
-  const detail::https_url& from, const httplib::Response& response, const std::size_t followed) const
-  -> detail::https_url
+  const detail::https_url& from,
+  const httplib::Response& response,
+  const std::size_t followed,
+  const std::source_location loc) const -> detail::https_url
 {
   const auto location = response.get_header_value("Location");
 
@@ -720,7 +729,8 @@ inline auto transport_https::redirect(
         response.status,
         from.origin,
         from.target),
-      config_error::io_error};
+      config_error::io_error,
+      loc};
   }
 
   auto next = detail::resolve_redirect(from, location);
@@ -733,7 +743,8 @@ inline auto transport_https::redirect(
         url_,
         detail::without_userinfo(location),
         detail::describe(next.error())),
-      config_error::io_error};
+      config_error::io_error,
+      loc};
   }
 
   // Resolved first, so that what is quoted here has been through
@@ -747,7 +758,8 @@ inline auto transport_https::redirect(
         next->origin,
         next->target,
         options_.redirect_limit),
-      config_error::io_error};
+      config_error::io_error,
+      loc};
   }
 
   return std::move(*next);

@@ -128,6 +128,7 @@ using ::arude::enum_values;
 using ::arude::dependent_t;
 using ::arude::exception;
 using ::arude::exception_base;
+using ::arude::exception_message;
 using ::arude::exception_report;
 using ::arude::exception_stacktrace_t;
 using ::arude::exception_string_t;

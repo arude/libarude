@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
+#include <source_location>
 #include <string_view>
 #include <utility>
 
@@ -69,10 +70,11 @@ public: // Accessors
   /// A copy, never a reference: a reference handed out from under the lock is
   /// a data race the caller cannot see.
   ///
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \return The cached value.
   /// \throws exception_t With not_found if the section has never been loaded or set.
   ///
-  [[nodiscard]] auto get() const -> T;
+  [[nodiscard]] auto get(std::source_location loc = std::source_location::current()) const -> T;
 
   ///
   /// Replaces the cached value. The document is untouched until store().
@@ -113,6 +115,7 @@ public: // Methods
   ///
   /// \param policy What to do about a source or a section that is missing, or
   ///               of another version.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \throws exception_t With not_found if the source, or any section
   ///                     registered on the document, is not there and the
   ///                     policy does not carry load_policy::create; with
@@ -120,7 +123,9 @@ public: // Methods
   ///                     cannot be read; with the transport's own error, or
   ///                     io_error, if the source cannot be.
   ///
-  auto load(load_policy policy = load_policy::upgrade_to_current) -> void;
+  auto
+  load(load_policy policy = load_policy::upgrade_to_current, std::source_location loc = std::source_location::current())
+    -> void;
 
   ///
   /// Stores the whole document this section belongs to.
@@ -131,6 +136,7 @@ public: // Methods
   /// source again on every store. Stores of one document are written one at a
   /// time, as config_document_handle::store() describes.
   ///
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \throws exception_t With read_only if the transport cannot be written;
   ///                     with invalid_payload if the document was never
   ///                     loaded and the source does not parse, in which case
@@ -139,7 +145,7 @@ public: // Methods
   ///                     to replace it; with the transport's own error, or
   ///                     io_error, if the read or the write fails.
   ///
-  auto store() -> void;
+  auto store(std::source_location loc = std::source_location::current()) -> void;
 
 private: // Variables
   std::shared_ptr<detail::section<T>> section_;
@@ -159,11 +165,11 @@ config_handle<T>::config_handle(
 ///
 ///
 template<configuration_c T>
-auto config_handle<T>::get() const -> T
+auto config_handle<T>::get(const std::source_location loc) const -> T
 {
   const auto lock = std::shared_lock{document_->mutex()};
 
-  return section_->value();
+  return section_->value(loc);
 }
 
 ///
@@ -197,17 +203,17 @@ auto config_handle<T>::name() const -> std::string_view
 ///
 ///
 template<configuration_c T>
-auto config_handle<T>::load(const load_policy policy) -> void
+auto config_handle<T>::load(const load_policy policy, const std::source_location loc) -> void
 {
-  document_->load(policy);
+  document_->load(policy, loc);
 }
 
 ///
 ///
 template<configuration_c T>
-auto config_handle<T>::store() -> void
+auto config_handle<T>::store(const std::source_location loc) -> void
 {
-  document_->store();
+  document_->store(loc);
 }
 
 } // namespace arude::config

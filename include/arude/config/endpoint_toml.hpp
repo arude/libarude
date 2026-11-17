@@ -29,6 +29,7 @@
 
 #include <format>
 #include <optional>
+#include <source_location>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -49,10 +50,12 @@ inline constexpr auto text_source = std::string_view{"<text>"};
 ///
 /// \param text TOML text. Not retained.
 /// \param source What the text came from, used in error messages only.
+/// \param loc The call site a failure reports.
 /// \return The parsed table.
 /// \throws exception_t With invalid_payload if the text is not a TOML document.
 ///
-[[nodiscard]] auto read_toml_document(std::string_view text, std::string_view source) -> toml::table;
+[[nodiscard]] auto read_toml_document(std::string_view text, std::string_view source, std::source_location loc)
+  -> toml::table;
 
 ///
 /// Renders a table as TOML text, as rfl::toml::write renders one.
@@ -64,7 +67,8 @@ inline constexpr auto text_source = std::string_view{"<text>"};
 
 ///
 ///
-inline auto read_toml_document(const std::string_view text, const std::string_view source) -> toml::table
+inline auto read_toml_document(
+  const std::string_view text, const std::string_view source, const std::source_location loc) -> toml::table
 {
   try
   {
@@ -76,8 +80,9 @@ inline auto read_toml_document(const std::string_view text, const std::string_vi
     // which is not an arude::exception and would walk past every handler a
     // caller of this subsystem has.
     throw exception_t{
-      std::format("arude::config: '{}' is not valid TOML: {}", source, exception_report()),
-      config_error::invalid_payload};
+      std::format("arude::config: '{}' is not valid TOML: {}", source, exception_message()),
+      config_error::invalid_payload,
+      loc};
   }
 }
 
@@ -191,13 +196,15 @@ public: // Accessors
   ///             medium-integrated endpoint can constrain it further and fail
   ///             at the interface when mispaired.
   /// \param carrier Where the bytes come from.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \return The parsed table, or std::nullopt where the transport has
   ///         nothing at its address.
   /// \throws exception_t With invalid_payload if the bytes are not a TOML
   ///                     document, or whatever the transport throws.
   ///
   template<transport_c Tr>
-  [[nodiscard]] auto parse(const Tr& carrier) const -> std::optional<document_t>;
+  [[nodiscard]] auto parse(const Tr& carrier, std::source_location loc = std::source_location::current()) const
+    -> std::optional<document_t>;
 
   ///
   /// Returns a reader over a table, which carries this endpoint's options to
@@ -222,9 +229,13 @@ public: // Methods
   /// \tparam Tr Transport type, as for parse.
   /// \param carrier Where the bytes go.
   /// \param document The table to write.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
+  /// \throws Whatever the transport throws.
   ///
   template<transport_c Tr>
-  auto emit(const Tr& carrier, const document_t& document) const -> void;
+  auto
+  emit(const Tr& carrier, const document_t& document, std::source_location loc = std::source_location::current()) const
+    -> void;
 
   ///
   /// Returns a writer over a table.
@@ -247,22 +258,25 @@ private: // Variables
 ///
 /// \tparam T Configuration type.
 /// \param val Configuration to render. Not retained.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
 /// \return The TOML text.
+/// \throws exception_t As write_section() does.
 ///
 template<configuration_c T>
-[[nodiscard]] auto to_toml(const T& val) -> std::string;
+[[nodiscard]] auto to_toml(const T& val, std::source_location loc = std::source_location::current()) -> std::string;
 
 ///
 /// Parses TOML text as a configuration of exactly T's version.
 ///
 /// \tparam T Configuration type.
 /// \param text TOML text. Not retained.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
 /// \return The parsed configuration.
 /// \throws exception_t With invalid_payload if the text does not parse, or
 ///         invalid_version if it declares a version other than T's.
 ///
 template<configuration_c T>
-[[nodiscard]] auto from_toml(std::string_view text) -> T;
+[[nodiscard]] auto from_toml(std::string_view text, std::source_location loc = std::source_location::current()) -> T;
 
 ///
 /// Parses TOML text as any version To knows, and migrates it to To.
@@ -270,12 +284,14 @@ template<configuration_c T>
 ///
 /// \tparam To Configuration version to end up at, usually the current one.
 /// \param text TOML text. Not retained.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
 /// \return The configuration, migrated to To.
 /// \throws exception_t With invalid_payload if the text does not parse, or
 ///         invalid_version if it declares a version this build has no type for.
 ///
 template<configuration_c To>
-[[nodiscard]] auto from_toml_migrated(std::string_view text) -> To;
+[[nodiscard]] auto from_toml_migrated(std::string_view text, std::source_location loc = std::source_location::current())
+  -> To;
 
 ///
 /// Returns the configuration version TOML text declares.
@@ -283,10 +299,12 @@ template<configuration_c To>
 /// including one this build has no type for.
 ///
 /// \param text TOML text. Not retained.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
 /// \return The version the text declares.
 /// \throws exception_t With invalid_payload if the text does not parse, or carries no version.
 ///
-[[nodiscard]] auto toml_version(std::string_view text) -> version_t;
+[[nodiscard]] auto toml_version(std::string_view text, std::source_location loc = std::source_location::current())
+  -> version_t;
 
 ///
 ///
@@ -298,16 +316,16 @@ inline endpoint_toml::endpoint_toml(const endpoint_toml_options options)
 ///
 ///
 template<transport_c Tr>
-auto endpoint_toml::parse(const Tr& carrier) const -> std::optional<document_t>
+auto endpoint_toml::parse(const Tr& carrier, const std::source_location loc) const -> std::optional<document_t>
 {
-  const auto bytes = carrier.read();
+  const auto bytes = detail::read_from(carrier, loc);
 
   if(!bytes.has_value())
   {
     return std::nullopt;
   }
 
-  return detail::read_toml_document(as_text(bytes.value()), carrier.location());
+  return detail::read_toml_document(as_text(bytes.value()), carrier.location(), loc);
 }
 
 ///
@@ -320,9 +338,9 @@ inline auto endpoint_toml::make_reader(const document_t& document) const -> toml
 ///
 ///
 template<transport_c Tr>
-auto endpoint_toml::emit(const Tr& carrier, const document_t& document) const -> void
+auto endpoint_toml::emit(const Tr& carrier, const document_t& document, const std::source_location loc) const -> void
 {
-  carrier.write(as_bytes(detail::write_toml_document(document)));
+  detail::write_to(carrier, as_bytes(detail::write_toml_document(document)), loc);
 }
 
 ///
@@ -336,10 +354,10 @@ inline auto endpoint_toml::make_writer(document_t& document) const -> toml_tree_
 ///
 ///
 template<configuration_c T>
-auto to_toml(const T& val) -> std::string
+auto to_toml(const T& val, const std::source_location loc) -> std::string
 {
   auto document = endpoint_toml::document_t{};
-  write_section(endpoint_toml{}, document, {}, val);
+  write_section(endpoint_toml{}, document, {}, val, loc);
 
   return detail::write_toml_document(document);
 }
@@ -347,27 +365,32 @@ auto to_toml(const T& val) -> std::string
 ///
 ///
 template<configuration_c T>
-auto from_toml(const std::string_view text) -> T
+auto from_toml(const std::string_view text, const std::source_location loc) -> T
 {
   // load_policy::none, so a version other than T's is refused rather than
   // migrated: from_toml_migrated is what accepts an older one.
-  return read_section<T>(endpoint_toml{}, detail::read_toml_document(text, detail::text_source), {}, load_policy::none);
+  return read_section<T>(
+    endpoint_toml{}, detail::read_toml_document(text, detail::text_source, loc), {}, load_policy::none, loc);
 }
 
 ///
 ///
 template<configuration_c To>
-auto from_toml_migrated(const std::string_view text) -> To
+auto from_toml_migrated(const std::string_view text, const std::source_location loc) -> To
 {
   return read_section<To>(
-    endpoint_toml{}, detail::read_toml_document(text, detail::text_source), {}, load_policy::upgrade_to_current);
+    endpoint_toml{},
+    detail::read_toml_document(text, detail::text_source, loc),
+    {},
+    load_policy::upgrade_to_current,
+    loc);
 }
 
 ///
 ///
-inline auto toml_version(const std::string_view text) -> version_t
+inline auto toml_version(const std::string_view text, const std::source_location loc) -> version_t
 {
-  const auto document = detail::read_toml_document(text, detail::text_source);
+  const auto document = detail::read_toml_document(text, detail::text_source, loc);
   const auto tree = endpoint_toml{}.make_reader(document);
 
   try
@@ -377,8 +400,10 @@ inline auto toml_version(const std::string_view text) -> version_t
   catch(...)
   {
     throw exception_t{
-      std::format("arude::config: '{}' declares no configuration version: {}", detail::text_source, exception_report()),
-      config_error::invalid_payload};
+      std::format(
+        "arude::config: '{}' declares no configuration version: {}", detail::text_source, exception_message()),
+      config_error::invalid_payload,
+      loc};
   }
 }
 

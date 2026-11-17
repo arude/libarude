@@ -389,6 +389,28 @@ SCENARIO("the module exports both exception_report overloads", "[module]")
   }
 }
 
+SCENARIO("the module exports exception_message", "[module]")
+{
+  GIVEN("an exception in flight")
+  {
+    auto message = arude::exception_string_t{};
+
+    try
+    {
+      throw arude::exception{"message only"};
+    }
+    catch(...)
+    {
+      message = arude::exception_message();
+    }
+
+    THEN("its message comes back alone")
+    {
+      REQUIRE(message == "message only");
+    }
+  }
+}
+
 // A module consumer and a header consumer must agree on what arude::exception
 // is. They do because the headers are included in the global module fragment,
 // so the type keeps global-module linkage. Were it attached to the module, this

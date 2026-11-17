@@ -59,6 +59,7 @@
 #include <format>
 #include <optional>
 #include <ranges>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -281,15 +282,21 @@ template<configuration_c T>
 /// \param name The section name, or empty for the root.
 /// \param foreign The names of the registered named sections.
 /// \param policy What to do about a differently versioned section.
+/// \param loc The call site a failure reports.
 /// \return The configuration, migrated where the policy allows it, and the
 ///         keys it owns in the tree.
 /// \throws exception_t With invalid_payload or invalid_version, which is also
-///                     what a throw from the tree is reported as.
+///                     what a throw from the tree is reported as. The message
+///                     carries that of the failure underneath, and nothing
+///                     else of it.
 ///
 template<configuration_c T>
-[[nodiscard]] auto
-parse_section(const tree_reader& tree, std::string_view name, const key_set_t& foreign, load_policy policy)
-  -> parsed_section<T>;
+[[nodiscard]] auto parse_section(
+  const tree_reader& tree,
+  std::string_view name,
+  const key_set_t& foreign,
+  load_policy policy,
+  std::source_location loc) -> parsed_section<T>;
 
 ///
 /// Parses a subtree as whichever version of To's chain matches its version
@@ -617,8 +624,11 @@ auto read_tree_hiding(const tree_reader& tree, const tree_node node, const key_s
 ///
 template<configuration_c T>
 auto parse_section(
-  const tree_reader& tree, const std::string_view name, const key_set_t& foreign, const load_policy policy)
-  -> parsed_section<T>
+  const tree_reader& tree,
+  const std::string_view name,
+  const key_set_t& foreign,
+  const load_policy policy,
+  const std::source_location loc) -> parsed_section<T>
 {
   const auto source = name.empty() ? std::string_view{"the document"} : name;
 
@@ -638,8 +648,9 @@ auto parse_section(
   catch(...)
   {
     throw exception_t{
-      std::format("arude::config: {} declares no configuration version: {}", source, exception_report()),
-      config_error::invalid_payload};
+      std::format("arude::config: {} declares no configuration version: {}", source, exception_message()),
+      config_error::invalid_payload,
+      loc};
   }
 
   if(version == version_of<T>())
@@ -654,8 +665,9 @@ auto parse_section(
     catch(...)
     {
       throw exception_t{
-        std::format("arude::config: {} is not a {}: {}", source, type_name<T>(), exception_report()),
-        config_error::invalid_payload};
+        std::format("arude::config: {} is not a {}: {}", source, type_name<T>(), exception_message()),
+        config_error::invalid_payload,
+        loc};
     }
   }
 
@@ -663,7 +675,8 @@ auto parse_section(
   {
     throw exception_t{
       std::format("arude::config: {} is version {}, and version {} was asked for.", source, version, version_of<T>()),
-      config_error::invalid_version};
+      config_error::invalid_version,
+      loc};
   }
 
   try
@@ -674,8 +687,9 @@ auto parse_section(
   {
     throw exception_t{
       std::format(
-        "arude::config: {} cannot be migrated to version {}: {}", source, version_of<T>(), exception_report()),
-      config_error::invalid_version};
+        "arude::config: {} cannot be migrated to version {}: {}", source, version_of<T>(), exception_message()),
+      config_error::invalid_version,
+      loc};
   }
 }
 
@@ -798,6 +812,11 @@ concept tree_endpoint_c =
 /// parse() and emit() further, to path_transport_c say, and is then refused at
 /// the interface where it is paired with a transport that does not fit.
 ///
+/// parse() and emit() may take a trailing std::source_location as well, which
+/// is the call site a failure should report, and which a document hands them
+/// through detail::parse_from() and detail::emit_to(). An endpoint that takes
+/// one has to default it, as it must stay callable without.
+///
 /// \tparam E Type to test.
 /// \tparam Tr Transport the endpoint is to be used with.
 ///
@@ -825,14 +844,19 @@ concept endpoint_c = transport_c<Tr> &&
 /// \param document The tree to read from. Not retained.
 /// \param name The section name, or empty for the root.
 /// \param policy What to do about a differently versioned section.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
 /// \return The configuration, migrated where the policy allows it.
 /// \throws exception_t With invalid_payload, which is also what a named
 ///                     section that is not in the tree is, or with
 ///                     invalid_version.
 ///
 template<configuration_c T, tree_endpoint_c E>
-[[nodiscard]] auto
-read_section(const E& format, const typename E::document_t& document, std::string_view name, load_policy policy) -> T;
+[[nodiscard]] auto read_section(
+  const E& format,
+  const typename E::document_t& document,
+  std::string_view name,
+  load_policy policy,
+  std::source_location loc = std::source_location::current()) -> T;
 
 ///
 /// Writes one section into an endpoint's tree. An empty name is the root. The
@@ -850,29 +874,44 @@ read_section(const E& format, const typename E::document_t& document, std::strin
 /// \param document The tree to write into.
 /// \param name The section name, or empty for the root.
 /// \param val Configuration to write. Not retained.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
 /// \throws exception_t Whatever the endpoint's writer threw, where that is an
 ///                     exception_t, and with io_error for anything else, as a
 ///                     document's store() reports it. The tree may hold part
 ///                     of the section then.
 ///
 template<configuration_c T, tree_endpoint_c E>
-auto write_section(const E& format, typename E::document_t& document, std::string_view name, const T& val) -> void;
+auto write_section(
+  const E& format,
+  typename E::document_t& document,
+  std::string_view name,
+  const T& val,
+  std::source_location loc = std::source_location::current()) -> void;
 
 ///
 ///
 template<configuration_c T, tree_endpoint_c E>
 auto read_section(
-  const E& format, const typename E::document_t& document, const std::string_view name, const load_policy policy) -> T
+  const E& format,
+  const typename E::document_t& document,
+  const std::string_view name,
+  const load_policy policy,
+  const std::source_location loc) -> T
 {
   const auto tree = format.make_reader(document);
 
-  return detail::parse_section<T>(tree, name, {}, policy).value;
+  return detail::parse_section<T>(tree, name, {}, policy, loc).value;
 }
 
 ///
 ///
 template<configuration_c T, tree_endpoint_c E>
-auto write_section(const E& format, typename E::document_t& document, const std::string_view name, const T& val) -> void
+auto write_section(
+  const E& format,
+  typename E::document_t& document,
+  const std::string_view name,
+  const T& val,
+  const std::source_location loc) -> void
 {
   try
   {
@@ -889,8 +928,81 @@ auto write_section(const E& format, typename E::document_t& document, const std:
     const auto target = name.empty() ? std::string_view{"the document"} : name;
 
     throw exception_t{
-      std::format("arude::config: {} could not be written: {}", target, exception_report()), config_error::io_error};
+      std::format("arude::config: {} could not be written: {}", target, exception_message()),
+      config_error::io_error,
+      loc};
   }
 }
 
 } // namespace arude::config
+
+namespace arude::config::detail
+{
+
+///
+/// Parses through an endpoint, handing it the call site where it takes one.
+///
+/// \tparam E Endpoint type.
+/// \tparam Tr Transport type.
+/// \param format The endpoint.
+/// \param carrier The transport it reads through.
+/// \param loc The call site a failure should report.
+/// \return Whatever the endpoint's parse() returns.
+/// \throws Whatever the endpoint's parse() throws.
+///
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
+[[nodiscard]] auto parse_from(const E& format, const Tr& carrier, std::source_location loc)
+  -> std::optional<typename E::document_t>;
+
+///
+/// Emits through an endpoint, handing it the call site where it takes one.
+///
+/// \tparam E Endpoint type.
+/// \tparam Tr Transport type.
+/// \param format The endpoint.
+/// \param carrier The transport it writes through.
+/// \param document The tree to write.
+/// \param loc The call site a failure should report.
+/// \throws Whatever the endpoint's emit() throws.
+///
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
+auto emit_to(const E& format, const Tr& carrier, const typename E::document_t& document, std::source_location loc)
+  -> void;
+
+///
+///
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
+auto parse_from(const E& format, const Tr& carrier, const std::source_location loc)
+  -> std::optional<typename E::document_t>
+{
+  if constexpr(requires { format.parse(carrier, loc); })
+  {
+    return format.parse(carrier, loc);
+  }
+  else
+  {
+    return format.parse(carrier);
+  }
+}
+
+///
+///
+template<typename E, typename Tr>
+  requires endpoint_c<E, Tr>
+auto emit_to(const E& format, const Tr& carrier, const typename E::document_t& document, const std::source_location loc)
+  -> void
+{
+  if constexpr(requires { format.emit(carrier, document, loc); })
+  {
+    format.emit(carrier, document, loc);
+  }
+  else
+  {
+    format.emit(carrier, document);
+  }
+}
+
+} // namespace arude::config::detail

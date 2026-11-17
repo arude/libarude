@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <shared_mutex>
+#include <source_location>
 #include <string>
 #include <string_view>
 
@@ -98,6 +99,7 @@ public:
   /// \param foreign The names of the registered named sections, which the
   ///                root section does not see.
   /// \param policy What to do about a missing or differently versioned section.
+  /// \param loc The call site a failure reports.
   /// \return The step that installs the value read and the keys the section
   ///         owns in the source. The document calls it under its exclusive
   ///         lock, at most once, and keeps the section alive until it has.
@@ -106,7 +108,8 @@ public:
   ///                     invalid_payload or invalid_version if it is there
   ///                     and cannot be read.
   ///
-  [[nodiscard]] virtual auto prepare_load(const tree_reader& tree, const key_set_t& foreign, load_policy policy)
+  [[nodiscard]] virtual auto
+  prepare_load(const tree_reader& tree, const key_set_t& foreign, load_policy policy, std::source_location loc)
     -> std::function<void()> = 0;
 
   ///
@@ -134,6 +137,11 @@ public:
 ///
 /// What the manager's registry owns, and what a handle reaches through.
 /// Everything here is virtual so the manager can hold one erased type.
+///
+/// A virtual that can throw takes the call site a failure reports, and takes
+/// it explicitly: a default argument on a virtual is bound by the static type
+/// it is called through. The handles are where the default is, and they hand
+/// it on.
 ///
 class document_base
 {
@@ -165,13 +173,14 @@ public:
   ///
   /// \param policy What to do about a source or a section that is missing, or
   ///               of another version.
+  /// \param loc The call site a failure reports.
   /// \throws exception_t With not_found if the source, or a section of it, is
   ///                     not there and the policy does not create it; with
   ///                     invalid_payload or invalid_version if a section
   ///                     cannot be read; with the transport's own error, or
   ///                     io_error, if the source cannot be.
   ///
-  virtual auto load(load_policy policy) -> void = 0;
+  virtual auto load(load_policy policy, std::source_location loc) -> void = 0;
 
   ///
   /// Stores the document with one write of the whole document.
@@ -187,6 +196,7 @@ public:
   /// load() never wait for a store's write, only for the brief snapshot it
   /// takes under the cache lock.
   ///
+  /// \param loc The call site a failure reports.
   /// \throws exception_t With read_only if the transport cannot be written;
   ///                     with invalid_payload if the source has to be read
   ///                     first and does not parse, in which case it is left
@@ -194,7 +204,7 @@ public:
   ///                     the transport's own error, or io_error, if the read
   ///                     or the write fails.
   ///
-  virtual auto store() -> void = 0;
+  virtual auto store(std::source_location loc) -> void = 0;
 
   ///
   /// Forgets the source, so that a store() writes what the engaged sections
@@ -238,11 +248,12 @@ public:
   /// sections attached under one name at once, only one gets through.
   ///
   /// \param section The section to attach. Kept, unless it is refused.
+  /// \param loc The call site a failure reports.
   /// \throws exception_t With already_registered_section, naming the section
   ///                     and the location, where the section is refused. The
   ///                     document is then left as it was.
   ///
-  virtual auto attach(std::shared_ptr<section_base> section) -> void = 0;
+  virtual auto attach(std::shared_ptr<section_base> section, std::source_location loc) -> void = 0;
 
   ///
   /// Registers a section with the manager's type index.

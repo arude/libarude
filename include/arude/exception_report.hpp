@@ -145,6 +145,23 @@ namespace arude
 [[nodiscard]] auto exception_report(const std::exception_ptr& eptr) -> exception_string_t;
 
 ///
+/// Returns the message of the exception being handled, and nothing else.
+/// What to embed in the message of an exception thrown in its place: unlike
+/// exception_report(), it carries no location and no stacktrace, so the report
+/// of the exception thrown in its place names one location and holds one
+/// stacktrace. A nested exception's message follows its outer one after ": ",
+/// for up to ARUDE_EXCEPTION_REPORT_MAX_DEPTH levels. Must be called from
+/// inside a catch handler; with no exception in flight it says so instead of
+/// failing.
+///
+/// \return str() of an arude exception, what() of a std::exception, the text of
+///         a thrown string literal, the value of a thrown char, short, int,
+///         float or double, or a stand-in naming the exception as unknown.
+/// \throws std::bad_alloc If the message string cannot be allocated.
+///
+[[nodiscard]] auto exception_message() -> exception_string_t;
+
+///
 ///
 // The recursion is the mechanism for unwinding nested exceptions, not an
 // oversight; exception_report_guard is what bounds it.
@@ -262,6 +279,94 @@ inline auto exception_report(const std::exception_ptr& eptr) -> exception_string
   {
     return exception_report();
   }
+}
+
+///
+///
+inline auto exception_message() -> exception_string_t
+{
+  auto current = std::current_exception();
+
+  if(current == nullptr)
+  {
+    return "No exception is being handled";
+  }
+
+  auto message = exception_string_t{};
+
+  // A loop rather than recursion, so a cyclic or runaway chain stops at the
+  // depth limit without the guard exception_report() needs.
+  for(auto depth = 0; current != nullptr && depth < ARUDE_EXCEPTION_REPORT_MAX_DEPTH; ++depth)
+  {
+    auto nested = std::exception_ptr{};
+
+    // Rethrowing is how a nested exception is reached without RTTI, the same
+    // route exception_report() takes.
+    const auto nested_of = [&nested](const auto& ex) -> void
+    {
+      try
+      {
+        std::rethrow_if_nested(ex);
+      }
+      catch(...)
+      {
+        nested = std::current_exception();
+      }
+    };
+
+    if(depth > 0)
+    {
+      message += ": ";
+    }
+
+    try
+    {
+      std::rethrow_exception(current);
+    }
+    catch(const char chr)
+    {
+      message += chr;
+    }
+    catch(const char* const str)
+    {
+      // A thrown null pointer is still a const char*, and no string to copy.
+      message += str != nullptr ? str : "Unknown exception";
+    }
+    catch(const short num)
+    {
+      message += std::format("{}", num);
+    }
+    catch(const int num)
+    {
+      message += std::format("{}", num);
+    }
+    catch(const float num)
+    {
+      message += std::format("{}", num);
+    }
+    catch(const double num)
+    {
+      message += std::format("{}", num);
+    }
+    catch(const exception_base& ex)
+    {
+      message += ex.str();
+      nested_of(ex);
+    }
+    catch(const std::exception& ex)
+    {
+      message += ex.what();
+      nested_of(ex);
+    }
+    catch(...)
+    {
+      message += "Unknown exception";
+    }
+
+    current = nested;
+  }
+
+  return message;
 }
 
 } // namespace arude

@@ -9,12 +9,15 @@
 #pragma once
 
 #include "arude/config/base64.hpp"
+#include "arude/exception.hpp"
 
 #include <rfl.hpp>
 
 #include <concepts>
 #include <cstddef>
 #include <ranges>
+#include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -118,9 +121,10 @@ public: // Accessors
   /// not decode.
   ///
   /// \param text Encoded text.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \throws arude::exception If the text is not valid base64.
   ///
-  constexpr auto base64(std::string_view text) -> void;
+  constexpr auto base64(std::string_view text, std::source_location loc = std::source_location::current()) -> void;
 
   ///
   /// Returns the number of bytes held.
@@ -175,11 +179,11 @@ constexpr auto binary::base64() const -> string_t
 
 ///
 ///
-constexpr auto binary::base64(const std::string_view text) -> void
+constexpr auto binary::base64(const std::string_view text, const std::source_location loc) -> void
 {
   // Decoded into a temporary first, so a throw from base64_decode() leaves the
   // payload untouched rather than half replaced.
-  auto decoded = base64_decode(text);
+  auto decoded = base64_decode(text, loc);
   bytes_ = std::move(decoded);
 }
 
@@ -222,10 +226,16 @@ struct Reflector<arude::config::binary>
 
   ///
   /// Builds a payload from the text read out of a configuration file.
+  /// Throws a std::exception and never an arude one: reflect-cpp calls this
+  /// from a noexcept parser that turns a std::exception into a parse error and
+  /// lets anything else through to std::terminate. The parse error carries the
+  /// message, and the document or text function that started the read throws
+  /// an exception_t naming its own caller in its place, which is why there is
+  /// no call site to take here.
   ///
   /// \param val Base64 text.
   /// \return The decoded payload.
-  /// \throws arude::exception If the text is not valid base64.
+  /// \throws std::invalid_argument If the text is not valid base64, with the reason as its message.
   ///
   [[nodiscard]] static constexpr auto to(const ReflType& val) -> arude::config::binary;
 
@@ -243,7 +253,15 @@ struct Reflector<arude::config::binary>
 constexpr auto Reflector<arude::config::binary>::to(const ReflType& val) -> arude::config::binary
 {
   auto payload = arude::config::binary{};
-  payload.base64(val);
+
+  try
+  {
+    payload.base64(val);
+  }
+  catch(const arude::exception_base& ex)
+  {
+    throw std::invalid_argument{ex.str()};
+  }
 
   return payload;
 }

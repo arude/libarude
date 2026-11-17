@@ -57,6 +57,7 @@
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -95,12 +96,14 @@ public: // Methods
   /// \tparam Tr Transport type, moved in. The manager keys on its location().
   /// \param format The endpoint instance.
   /// \param carrier The transport instance.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \return The document handle, the only way to add sections to it.
   /// \throws exception_t With already_registered_location if a document is already there.
   ///
   template<typename E, transport_c Tr>
     requires endpoint_c<E, Tr>
-  [[nodiscard]] auto register_document(E format, Tr carrier) -> config_document_handle;
+  [[nodiscard]] auto register_document(E format, Tr carrier, std::source_location loc = std::source_location::current())
+    -> config_document_handle;
 
   ///
   /// Returns a copy of the value cached for T.
@@ -108,23 +111,26 @@ public: // Methods
   /// used, and prefer the handle everywhere else.
   ///
   /// \tparam T Configuration type.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \return The cached value.
-  /// \throws exception_t With not_found if T is registered nowhere, and
+  /// \throws exception_t With not_found if T is registered nowhere, or if its
+  ///                     section has never been loaded or set, and
   ///                     ambiguous_type if it is registered in more than one place.
   ///
   template<configuration_c T>
-  [[nodiscard]] auto get() const -> T;
+  [[nodiscard]] auto get(std::source_location loc = std::source_location::current()) const -> T;
 
   ///
   /// Returns the section handle T is registered as.
   ///
   /// \tparam T Configuration type.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \return The handle.
   /// \throws exception_t With not_found if T is registered nowhere, and
   ///                     ambiguous_type if it is registered in more than one place.
   ///
   template<configuration_c T>
-  [[nodiscard]] auto find() const -> config_handle<T>;
+  [[nodiscard]] auto find(std::source_location loc = std::source_location::current()) const -> config_handle<T>;
 
 public: // Accessors
   ///
@@ -150,10 +156,13 @@ public: // Methods
   ///
   /// \param policy What to do about a source or a section that is missing, or
   ///               of another version.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \throws exception_t As config_document_handle::load does, for the first
   ///                     document that fails.
   ///
-  auto load_all(load_policy policy = load_policy::upgrade_to_current) -> void;
+  auto load_all(
+    load_policy policy = load_policy::upgrade_to_current, std::source_location loc = std::source_location::current())
+    -> void;
 
 private:                            // Variables
   mutable std::shared_mutex mutex_; // Guards documents_; the type index locks itself.
@@ -168,7 +177,7 @@ private:                            // Variables
 ///
 template<typename E, transport_c Tr>
   requires endpoint_c<E, Tr>
-auto config_manager::register_document(E format, Tr carrier) -> config_document_handle
+auto config_manager::register_document(E format, Tr carrier, const std::source_location loc) -> config_document_handle
 {
   const auto location = carrier.location();
 
@@ -178,7 +187,9 @@ auto config_manager::register_document(E format, Tr carrier) -> config_document_
     if(documents_.contains(location))
     {
       throw exception_t{
-        std::format("arude::config: '{}' is already registered.", location), config_error::already_registered_location};
+        std::format("arude::config: '{}' is already registered.", location),
+        config_error::already_registered_location,
+        loc};
     }
   }
 
@@ -190,7 +201,9 @@ auto config_manager::register_document(E format, Tr carrier) -> config_document_
     if(documents_.contains(location))
     {
       throw exception_t{
-        std::format("arude::config: '{}' is already registered.", location), config_error::already_registered_location};
+        std::format("arude::config: '{}' is already registered.", location),
+        config_error::already_registered_location,
+        loc};
     }
 
     documents_.emplace(location, document);
@@ -202,15 +215,15 @@ auto config_manager::register_document(E format, Tr carrier) -> config_document_
 ///
 ///
 template<configuration_c T>
-auto config_manager::get() const -> T
+auto config_manager::get(const std::source_location loc) const -> T
 {
-  return find<T>().get();
+  return find<T>(loc).get(loc);
 }
 
 ///
 ///
 template<configuration_c T>
-auto config_manager::find() const -> config_handle<T>
+auto config_manager::find(const std::source_location loc) const -> config_handle<T>
 {
   // A copy, so the registry is not held while the documents are asked for
   // their locations below.
@@ -218,7 +231,8 @@ auto config_manager::find() const -> config_handle<T>
 
   if(registrations.empty())
   {
-    throw exception_t{std::format("arude::config: {} is not registered.", type_name<T>()), config_error::not_found};
+    throw exception_t{
+      std::format("arude::config: {} is not registered.", type_name<T>()), config_error::not_found, loc};
   }
 
   if(registrations.size() > 1)
@@ -239,7 +253,8 @@ auto config_manager::find() const -> config_handle<T>
 
     throw exception_t{
       std::format("arude::config: {} is registered in {} places: {}.", type_name<T>(), registrations.size(), locations),
-      config_error::ambiguous_type};
+      config_error::ambiguous_type,
+      loc};
   }
 
   const auto& registration = registrations.front();
@@ -267,7 +282,7 @@ inline auto config_manager::size() const -> std::size_t
 
 ///
 ///
-inline auto config_manager::load_all(const load_policy policy) -> void
+inline auto config_manager::load_all(const load_policy policy, const std::source_location loc) -> void
 {
   std::vector<std::shared_ptr<detail::document_base>> documents;
 
@@ -282,7 +297,7 @@ inline auto config_manager::load_all(const load_policy policy) -> void
 
   for(const auto& document : documents)
   {
-    document->load(policy);
+    document->load(policy, loc);
   }
 }
 

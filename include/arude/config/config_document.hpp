@@ -105,6 +105,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -149,12 +150,12 @@ public: // Overrides
   ///
   /// \see document_base::load
   ///
-  auto load(load_policy policy) -> void override;
+  auto load(load_policy policy, std::source_location loc) -> void override;
 
   ///
   /// \see document_base::store
   ///
-  auto store() -> void override;
+  auto store(std::source_location loc) -> void override;
 
   ///
   /// \see document_base::discard_source
@@ -179,7 +180,7 @@ public: // Overrides
   ///
   /// \see document_base::attach
   ///
-  auto attach(std::shared_ptr<section_base> section) -> void override;
+  auto attach(std::shared_ptr<section_base> section, std::source_location loc) -> void override;
 
   ///
   /// \see document_base::register_type
@@ -231,21 +232,27 @@ private: // Helpers
   ///              io_error for reading and writing the source, invalid_payload
   ///              for reading sections out of the tree.
   /// \param step The step to run. Not retained.
+  /// \param loc The call site a failure reports.
   /// \return Whatever the step returns.
   /// \throws exception_t With the step's own error, or with the error given.
+  ///                     The message then carries that of what the step
+  ///                     threw, and nothing else of it.
   ///
-  auto guarded(std::string_view action, config_error error, const std::invocable auto& step) const -> decltype(auto);
+  auto
+  guarded(std::string_view action, config_error error, const std::invocable auto& step, std::source_location loc) const
+    -> decltype(auto);
 
   ///
   /// Reads the source and parses it, in the one read the transport makes.
   /// Takes no lock and changes nothing.
   ///
+  /// \param loc The call site a failure reports.
   /// \return The parsed tree, or nothing where the transport has nothing at
   ///         its address.
   /// \throws exception_t With the endpoint's or the transport's own error, or
   ///                     with io_error.
   ///
-  [[nodiscard]] auto read_source() const -> std::optional<document_t>;
+  [[nodiscard]] auto read_source(std::source_location loc) const -> std::optional<document_t>;
 
   ///
   /// Reads the source for a store, where the document has no tree of its own
@@ -253,12 +260,13 @@ private: // Helpers
   /// reads the source afresh every time, so a store does not wipe what was
   /// added to the source since an earlier one.
   ///
+  /// \param loc The call site a failure reports.
   /// \return The source's tree, empty where there is no source; or nothing,
   ///         without a read, where a load() or discard_source() has given the
   ///         document a tree.
   /// \throws exception_t As read_source() does.
   ///
-  [[nodiscard]] auto read_unknown_source() const -> std::optional<document_t>;
+  [[nodiscard]] auto read_unknown_source(std::source_location loc) const -> std::optional<document_t>;
 
 private: // Variables
   E format_;
@@ -323,7 +331,8 @@ public: // Overrides
   ///
   /// \see section_base::prepare_load
   ///
-  [[nodiscard]] auto prepare_load(const tree_reader& tree, const key_set_t& foreign, load_policy policy)
+  [[nodiscard]] auto
+  prepare_load(const tree_reader& tree, const key_set_t& foreign, load_policy policy, std::source_location loc)
     -> std::function<void()> override;
 
   ///
@@ -341,10 +350,11 @@ public: // Accessors
   ///
   /// Returns the cached value. The caller holds the document's lock.
   ///
+  /// \param loc The call site a failure reports.
   /// \return The cached value.
   /// \throws exception_t With not_found if the section has never been loaded or set.
   ///
-  [[nodiscard]] auto value() const -> const T&;
+  [[nodiscard]] auto value(std::source_location loc) const -> const T&;
 
   ///
   /// Replaces the cached value. The caller holds the document's lock.
@@ -402,7 +412,8 @@ auto section<T>::top_level_keys() const -> key_set_t
 ///
 ///
 template<configuration_c T>
-auto section<T>::prepare_load(const tree_reader& tree, const key_set_t& foreign, const load_policy policy)
+auto section<T>::prepare_load(
+  const tree_reader& tree, const key_set_t& foreign, const load_policy policy, const std::source_location loc)
   -> std::function<void()>
 {
   // Value-initialised is what a section that is not there takes when it is
@@ -411,14 +422,15 @@ auto section<T>::prepare_load(const tree_reader& tree, const key_set_t& foreign,
 
   if(detail::section_present(tree, name_, foreign))
   {
-    result = detail::parse_section<T>(tree, name_, foreign, policy);
+    result = detail::parse_section<T>(tree, name_, foreign, policy, loc);
   }
   else if(!is_set(policy, load_policy::create))
   {
     throw exception_t{
       std::format(
         "arude::config: {} is not in the source, and the load policy does not create it.", section_label(name_)),
-      config_error::not_found};
+      config_error::not_found,
+      loc};
   }
 
   // What was read lives in the closure and nowhere else until the document
@@ -460,7 +472,7 @@ auto section<T>::engaged() const -> bool
 ///
 ///
 template<configuration_c T>
-auto section<T>::value() const -> const T&
+auto section<T>::value(const std::source_location loc) const -> const T&
 {
   // Checked here rather than left to the caller. std::optional::value() throws
   // std::bad_optional_access, which derives from std::exception and not from
@@ -469,7 +481,7 @@ auto section<T>::value() const -> const T&
   if(!value_.has_value())
   {
     throw exception_t{
-      std::format("arude::config: {} has not been loaded or set.", section_label(name_)), config_error::not_found};
+      std::format("arude::config: {} has not been loaded or set.", section_label(name_)), config_error::not_found, loc};
   }
 
   return value_.value();
@@ -498,7 +510,7 @@ document<E, Tr>::document(E format, Tr carrier, std::weak_ptr<type_registry> reg
 ///
 template<typename E, typename Tr>
   requires endpoint_c<E, Tr>
-auto document<E, Tr>::load(const load_policy policy) -> void
+auto document<E, Tr>::load(const load_policy policy, const std::source_location loc) -> void
 {
   // Everything down to the lock works on this snapshot and on locals: the
   // I/O and the parsing are the slow part and must not block a get(), and
@@ -506,14 +518,16 @@ auto document<E, Tr>::load(const load_policy policy) -> void
   // this line is not part of this load.
   const auto [sections, number] = begin_load();
 
-  auto parsed = read_source();
+  auto parsed = read_source(loc);
 
   if(!parsed.has_value())
   {
     if(!is_set(policy, load_policy::create))
     {
       throw exception_t{
-        std::format("arude::config: there is no configuration at '{}'.", carrier_.location()), config_error::not_found};
+        std::format("arude::config: there is no configuration at '{}'.", carrier_.location()),
+        config_error::not_found,
+        loc};
     }
 
     // Nothing is written here. create is a decision about the cache and not
@@ -537,15 +551,17 @@ auto document<E, Tr>::load(const load_policy policy) -> void
     const auto tree = guarded(
       "read",
       config_error::invalid_payload,
-      [this, &parsed] -> decltype(auto) { return format_.make_reader(*parsed); });
+      [this, &parsed] -> decltype(auto) { return format_.make_reader(*parsed); },
+      loc);
 
     for(const auto& section : sections)
     {
       installs.push_back(guarded(
         "read",
         config_error::invalid_payload,
-        [&section, &tree, &foreign, policy] -> std::function<void()>
-        { return section->prepare_load(tree, foreign, policy); }));
+        [&section, &tree, &foreign, policy, loc] -> std::function<void()>
+        { return section->prepare_load(tree, foreign, policy, loc); },
+        loc));
     }
   }
 
@@ -579,12 +595,14 @@ auto document<E, Tr>::load(const load_policy policy) -> void
 ///
 template<typename E, typename Tr>
   requires endpoint_c<E, Tr>
-auto document<E, Tr>::store() -> void
+auto document<E, Tr>::store(const std::source_location loc) -> void
 {
   if(!carrier_.writable())
   {
     throw exception_t{
-      std::format("arude::config: the transport at '{}' is read-only.", carrier_.location()), config_error::read_only};
+      std::format("arude::config: the transport at '{}' is read-only.", carrier_.location()),
+      config_error::read_only,
+      loc};
   }
 
   // Held from before the snapshot until the write is done, so stores are
@@ -595,7 +613,7 @@ auto document<E, Tr>::store() -> void
   // store, so neither a get() nor a load() waits for this write.
   const auto io_lock = std::scoped_lock{io_mutex_};
 
-  auto unknown_source = read_unknown_source();
+  auto unknown_source = read_unknown_source(loc);
 
   document_t output;
 
@@ -625,10 +643,15 @@ auto document<E, Tr>::store() -> void
         {
           section->write_into(tree);
         }
-      });
+      },
+      loc);
   }
 
-  guarded("written", config_error::io_error, [this, &output] -> void { format_.emit(carrier_, output); });
+  guarded(
+    "written",
+    config_error::io_error,
+    [this, &output, loc] -> void { detail::emit_to(format_, carrier_, output, loc); },
+    loc);
 }
 
 ///
@@ -676,7 +699,7 @@ auto document<E, Tr>::mutex() const -> std::shared_mutex&
 ///
 template<typename E, typename Tr>
   requires endpoint_c<E, Tr>
-auto document<E, Tr>::attach(std::shared_ptr<section_base> section) -> void
+auto document<E, Tr>::attach(std::shared_ptr<section_base> section, const std::source_location loc) -> void
 {
   // Taken before the lock: for the root section this serialises a value of
   // its type, which has no business holding up a get().
@@ -692,7 +715,8 @@ auto document<E, Tr>::attach(std::shared_ptr<section_base> section) -> void
   {
     throw exception_t{
       std::format("arude::config: {} is already in the document at '{}'.", section_label(name), carrier_.location()),
-      config_error::already_registered_section};
+      config_error::already_registered_section,
+      loc};
   }
 
   // A named section's one key is its name, and the root's are its fields. So
@@ -710,7 +734,8 @@ auto document<E, Tr>::attach(std::shared_ptr<section_base> section) -> void
           carrier_.location(),
           key,
           section_label(owner->second)),
-        config_error::already_registered_section};
+        config_error::already_registered_section,
+        loc};
     }
   }
 
@@ -778,7 +803,10 @@ auto document<E, Tr>::begin_load() -> std::pair<section_vec_t, std::uint64_t>
 template<typename E, typename Tr>
   requires endpoint_c<E, Tr>
 auto document<E, Tr>::guarded(
-  const std::string_view action, const config_error error, const std::invocable auto& step) const -> decltype(auto)
+  const std::string_view action,
+  const config_error error,
+  const std::invocable auto& step,
+  const std::source_location loc) const -> decltype(auto)
 {
   try
   {
@@ -791,7 +819,9 @@ auto document<E, Tr>::guarded(
   catch(...)
   {
     throw exception_t{
-      std::format("arude::config: '{}' could not be {}: {}", carrier_.location(), action, exception_report()), error};
+      std::format("arude::config: '{}' could not be {}: {}", carrier_.location(), action, exception_message()),
+      error,
+      loc};
   }
 }
 
@@ -799,17 +829,20 @@ auto document<E, Tr>::guarded(
 ///
 template<typename E, typename Tr>
   requires endpoint_c<E, Tr>
-auto document<E, Tr>::read_source() const -> std::optional<document_t>
+auto document<E, Tr>::read_source(const std::source_location loc) const -> std::optional<document_t>
 {
   return guarded(
-    "read", config_error::io_error, [this] -> std::optional<document_t> { return format_.parse(carrier_); });
+    "read",
+    config_error::io_error,
+    [this, loc] -> std::optional<document_t> { return detail::parse_from(format_, carrier_, loc); },
+    loc);
 }
 
 ///
 ///
 template<typename E, typename Tr>
   requires endpoint_c<E, Tr>
-auto document<E, Tr>::read_unknown_source() const -> std::optional<document_t>
+auto document<E, Tr>::read_unknown_source(const std::source_location loc) const -> std::optional<document_t>
 {
   {
     const auto lock = std::shared_lock{mutex_};
@@ -821,7 +854,7 @@ auto document<E, Tr>::read_unknown_source() const -> std::optional<document_t>
   }
 
   // Outside the lock, like every other read of the source.
-  return read_source().value_or(document_t{});
+  return read_source(loc).value_or(document_t{});
 }
 
 } // namespace arude::config::detail
@@ -866,11 +899,14 @@ public: // Methods
   ///
   /// \param policy What to do about a source or a section that is missing, or
   ///               of another version.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \throws exception_t With not_found, invalid_payload or invalid_version,
   ///                     or with the transport's own error, or io_error, if
   ///                     the source cannot be read.
   ///
-  auto load(load_policy policy = load_policy::upgrade_to_current) -> void;
+  auto
+  load(load_policy policy = load_policy::upgrade_to_current, std::source_location loc = std::source_location::current())
+    -> void;
 
   ///
   /// Stores the document: one write of the whole document.
@@ -885,6 +921,7 @@ public: // Methods
   /// load() never wait for a store's write, only for the brief snapshot it
   /// takes under the cache lock.
   ///
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \throws exception_t With read_only if the transport cannot be written;
   ///                     with invalid_payload if the document was never
   ///                     loaded and the source does not parse, in which case
@@ -892,7 +929,7 @@ public: // Methods
   ///                     the way to replace it; with the transport's own
   ///                     error, or io_error, if the read or the write fails.
   ///
-  auto store() -> void;
+  auto store(std::source_location loc = std::source_location::current()) -> void;
 
   ///
   /// Forgets the source, so that a store() writes what the engaged sections
@@ -917,6 +954,7 @@ public: // Methods
   ///      what a refusal leaves behind.
   ///
   /// \tparam T Configuration type.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \return The section handle.
   /// \throws exception_t With already_registered_section if the document has
   ///                     a root already, or if a key that T can write at the
@@ -924,7 +962,7 @@ public: // Methods
   ///                     a section attached already.
   ///
   template<configuration_c T>
-  [[nodiscard]] auto add_root() -> config_handle<T>;
+  [[nodiscard]] auto add_root(std::source_location loc = std::source_location::current()) -> config_handle<T>;
 
   ///
   /// Adds a section under the name given, registering the type with the
@@ -953,12 +991,14 @@ public: // Methods
   ///
   /// \tparam T Configuration type.
   /// \param name The section's name, which is also its key in the document.
+  /// \param loc Where the call was made, which is what a failure reports. Left to its default.
   /// \return The section handle.
   /// \throws exception_t With already_registered_section, naming the section
   ///                     and the location, if the name is taken as above.
   ///
   template<configuration_c T>
-  [[nodiscard]] auto add_section(std::string_view name) -> config_handle<T>;
+  [[nodiscard]] auto add_section(std::string_view name, std::source_location loc = std::source_location::current())
+    -> config_handle<T>;
 
 private: // Variables
   std::shared_ptr<detail::document_base> document_;
@@ -987,16 +1027,16 @@ inline auto config_document_handle::writable() const -> bool
 
 ///
 ///
-inline auto config_document_handle::load(const load_policy policy) -> void
+inline auto config_document_handle::load(const load_policy policy, const std::source_location loc) -> void
 {
-  document_->load(policy);
+  document_->load(policy, loc);
 }
 
 ///
 ///
-inline auto config_document_handle::store() -> void
+inline auto config_document_handle::store(const std::source_location loc) -> void
 {
-  document_->store();
+  document_->store(loc);
 }
 
 ///
@@ -1009,21 +1049,22 @@ inline auto config_document_handle::discard_source() -> void
 ///
 ///
 template<configuration_c T>
-auto config_document_handle::add_root() -> config_handle<T>
+auto config_document_handle::add_root(const std::source_location loc) -> config_handle<T>
 {
-  return add_section<T>("");
+  return add_section<T>("", loc);
 }
 
 ///
 ///
 template<configuration_c T>
-auto config_document_handle::add_section(const std::string_view name) -> config_handle<T>
+auto config_document_handle::add_section(const std::string_view name, const std::source_location loc)
+  -> config_handle<T>
 {
   auto section = std::make_shared<detail::section<T>>(name);
 
   // Attached first, as attach() is what refuses a name that is taken, and
   // registered only once it has gone through: a refused section is in neither.
-  document_->attach(section);
+  document_->attach(section, loc);
   document_->register_type(type_key<T>(), section, document_);
 
   return config_handle<T>{std::move(section), document_};
