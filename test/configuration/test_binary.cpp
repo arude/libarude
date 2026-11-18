@@ -7,16 +7,66 @@
 /// LICENSING.md for the alternative MIT license available by arrangement.
 ///
 
+#include "arude/config.hpp"
 #include "arude/config/binary.hpp"
 #include "arude/exception.hpp"
+#include "test/helpers/temp_file.hpp"
+#include "test/helpers/write_text.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <rfl/toml/read.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
 #include <vector>
+
+namespace
+{
+namespace binary_test
+{
+
+///
+/// A table holding a payload, so the payload is read from inside a table
+/// rather than from the top level of the text.
+///
+struct credentials
+{
+  ///
+  /// The payload, as base64 text in the file.
+  ///
+  arude::config::binary secret;
+};
+
+///
+/// A configuration whose payload sits one table down.
+///
+struct vault
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the file.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// The table holding the payload.
+  ///
+  binary_test::credentials credentials;
+};
+
+} // namespace binary_test
+
+} // namespace
 
 SCENARIO("binary holds any range of bytes", "[config][binary]")
 {
@@ -148,6 +198,106 @@ SCENARIO("binary is a value type", "[config][binary]")
         REQUIRE(copy.size() == 2);
         REQUIRE(!(copy == payload));
       }
+    }
+  }
+}
+
+SCENARIO("binary's reflector reports text that is not base64 as a std::exception", "[config][binary]")
+{
+  using reflector_t = rfl::Reflector<arude::config::binary>;
+
+  GIVEN("a payload")
+  {
+    const auto payload = arude::config::binary{
+      std::array{std::byte{'f'}, std::byte{'o'}, std::byte{'o'}}
+    };
+
+    THEN("the reflector renders it as base64 and reads it back")
+    {
+      REQUIRE(reflector_t::from(payload) == "Zm9v");
+      REQUIRE(reflector_t::to(reflector_t::from(payload)) == payload);
+    }
+  }
+
+  GIVEN("text that is not base64")
+  {
+    const auto text = std::string{"!!!!"};
+
+    THEN("the reflector throws std::invalid_argument carrying the decoder's message")
+    {
+      // reflect-cpp calls the reflector from a noexcept parser that catches
+      // std::exception and nothing else. Any other type ends the process.
+      try
+      {
+        std::ignore = reflector_t::to(text);
+        FAIL("the reflector should have thrown");
+      }
+      catch(const std::invalid_argument& ex)
+      {
+        REQUIRE(std::string_view{ex.what()}.contains("is not a base64 character"));
+      }
+    }
+
+    WHEN("reflect-cpp's own TOML parser reads it into a payload")
+    {
+      const auto result = rfl::toml::read<binary_test::credentials>(std::string{"secret = \"!!!!\"\n"});
+
+      THEN("it is a parse error, and the process carries on")
+      {
+        REQUIRE(!result.has_value());
+        REQUIRE(std::string{result.error().what()}.contains("is not a base64 character"));
+      }
+    }
+  }
+}
+
+SCENARIO("a binary field in a table that is not base64 fails the load as invalid_payload", "[config][binary]")
+{
+  GIVEN("TOML text whose table holds a payload that is not base64")
+  {
+    constexpr auto text = std::string_view{"version = 1\n[credentials]\nsecret = \"!!!!\"\n"};
+
+    THEN("parsing it as a configuration is an invalid_payload naming the field and the base64 failure")
+    {
+      try
+      {
+        std::ignore = arude::config::from_toml<binary_test::vault>(text);
+        FAIL("parsing a payload that is not base64 should have thrown");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        REQUIRE(ex.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(ex.str().contains("'secret'"));
+        REQUIRE(ex.str().contains("is not a base64 character"));
+      }
+    }
+  }
+
+  GIVEN("a document whose section's table holds a payload that is not base64")
+  {
+    const auto file = test_helpers::temp_file{"arude_binary_bad_section.toml"};
+    test_helpers::write_text(file.path(), "[vault]\nversion = 1\n[vault.credentials]\nsecret = \"!!!!\"\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto section = document.add_section<binary_test::vault>("vault");
+
+    THEN("loading the document is an invalid_payload naming the field and the base64 failure")
+    {
+      try
+      {
+        document.load();
+        FAIL("loading a payload that is not base64 should have thrown");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        REQUIRE(ex.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(ex.str().contains("'secret'"));
+        REQUIRE(ex.str().contains("is not a base64 character"));
+      }
+
+      REQUIRE(!section.loaded());
     }
   }
 }

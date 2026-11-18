@@ -19,9 +19,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <concepts>
 #include <cstddef>
-#include <optional>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -67,6 +68,19 @@ namespace call_site_test
 [[nodiscard]] auto reads_as_one_failure(const arude::exception_base& failure) -> bool;
 
 ///
+/// Runs a call that is expected to throw, and returns what it threw.
+/// The exception comes back by value, so a scenario has nothing to check for
+/// emptiness before reading it.
+///
+/// \tparam E The exception type expected.
+/// \param call The call. Not retained.
+/// \return The exception the call threw.
+/// \throws std::logic_error If the call returns instead, which fails the scenario.
+///
+template<typename E>
+[[nodiscard]] auto failure_of(const std::invocable auto& call) -> E;
+
+///
 ///
 auto occurrences(const std::string_view text, const std::string_view part) -> std::size_t
 {
@@ -100,6 +114,23 @@ auto reads_as_one_failure(const arude::exception_base& failure) -> bool
          occurrences(report, "stacktrace:") == 1;
 }
 
+///
+///
+template<typename E>
+auto failure_of(const std::invocable auto& call) -> E
+{
+  try
+  {
+    call();
+  }
+  catch(const E& ex)
+  {
+    return ex;
+  }
+
+  throw std::logic_error{"The call was expected to throw, and returned."};
+}
+
 } // namespace call_site_test
 
 } // namespace
@@ -118,48 +149,36 @@ SCENARIO("a section missing from the source is reported where load() was called"
 
     WHEN("the document is loaded through the section's handle without creating it")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        network.load(arude::config::load_policy::none);
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &network] -> void
+        {
+          call = std::source_location::current();
+          network.load(arude::config::load_policy::none);
+        });
 
       THEN("it is a not_found raised at that call, which reads as one failure")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::not_found);
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
-        REQUIRE(call_site_test::reads_as_one_failure(failure.value()));
+        REQUIRE(failure.data() == arude::config::config_error::not_found);
+        REQUIRE(call_site_test::raised_at(failure, call));
+        REQUIRE(call_site_test::reads_as_one_failure(failure));
       }
     }
 
     WHEN("its value is asked for before any load")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        std::ignore = network.get();
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &network] -> void
+        {
+          call = std::source_location::current();
+          std::ignore = network.get();
+        });
 
       THEN("it is a not_found raised at the get()")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::not_found);
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
+        REQUIRE(failure.data() == arude::config::config_error::not_found);
+        REQUIRE(call_site_test::raised_at(failure, call));
       }
     }
   }
@@ -173,50 +192,38 @@ SCENARIO("text that is not TOML is reported where it was parsed", "[config][call
 
     WHEN("it is parsed as a configuration")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        std::ignore = arude::config::from_toml<test_helpers::config_test_t>(text);
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &text] -> void
+        {
+          call = std::source_location::current();
+          std::ignore = arude::config::from_toml<test_helpers::config_test_t>(text);
+        });
 
       THEN("it is an invalid_payload raised at the call, carrying toml++'s message as text")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::invalid_payload);
-        REQUIRE(failure.value().str().contains("is not valid TOML"));
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
-        REQUIRE(call_site_test::reads_as_one_failure(failure.value()));
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("is not valid TOML"));
+        REQUIRE(call_site_test::raised_at(failure, call));
+        REQUIRE(call_site_test::reads_as_one_failure(failure));
       }
     }
 
     WHEN("its version is asked for")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        std::ignore = arude::config::toml_version(text);
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &text] -> void
+        {
+          call = std::source_location::current();
+          std::ignore = arude::config::toml_version(text);
+        });
 
       THEN("it is an invalid_payload raised at the call")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::invalid_payload);
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
-        REQUIRE(call_site_test::reads_as_one_failure(failure.value()));
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(call_site_test::raised_at(failure, call));
+        REQUIRE(call_site_test::reads_as_one_failure(failure));
       }
     }
   }
@@ -227,25 +234,19 @@ SCENARIO("text that is not TOML is reported where it was parsed", "[config][call
 
     WHEN("its version is asked for")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        std::ignore = arude::config::toml_version(text);
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &text] -> void
+        {
+          call = std::source_location::current();
+          std::ignore = arude::config::toml_version(text);
+        });
 
       THEN("the failure underneath is quoted by its message alone")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().str().contains("declares no configuration version"));
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
-        REQUIRE(call_site_test::reads_as_one_failure(failure.value()));
+        REQUIRE(failure.str().contains("declares no configuration version"));
+        REQUIRE(call_site_test::raised_at(failure, call));
+        REQUIRE(call_site_test::reads_as_one_failure(failure));
       }
     }
   }
@@ -259,26 +260,20 @@ SCENARIO("a binary field that is not base64 is reported where it was read", "[co
 
     WHEN("it is parsed as a configuration")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        std::ignore = arude::config::from_toml<test_helpers::config_test_t>(text);
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &text] -> void
+        {
+          call = std::source_location::current();
+          std::ignore = arude::config::from_toml<test_helpers::config_test_t>(text);
+        });
 
       THEN("it is an invalid_payload raised at the call, naming the base64 failure as text")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::invalid_payload);
-        REQUIRE(failure.value().str().contains("is not a base64 character"));
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
-        REQUIRE(call_site_test::reads_as_one_failure(failure.value()));
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("is not a base64 character"));
+        REQUIRE(call_site_test::raised_at(failure, call));
+        REQUIRE(call_site_test::reads_as_one_failure(failure));
       }
     }
   }
@@ -295,26 +290,20 @@ SCENARIO("a binary field that is not base64 is reported where it was read", "[co
 
     WHEN("the document is loaded")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        document.load();
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &document] -> void
+        {
+          call = std::source_location::current();
+          document.load();
+        });
 
       THEN("it is an invalid_payload raised at the load()")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::invalid_payload);
-        REQUIRE(failure.value().str().contains("is not a base64 character"));
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
-        REQUIRE(call_site_test::reads_as_one_failure(failure.value()));
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("is not a base64 character"));
+        REQUIRE(call_site_test::raised_at(failure, call));
+        REQUIRE(call_site_test::reads_as_one_failure(failure));
       }
     }
   }
@@ -323,46 +312,34 @@ SCENARIO("a binary field that is not base64 is reported where it was read", "[co
   {
     WHEN("it is decoded directly")
     {
-      auto failure = std::optional<arude::exception<>>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        std::ignore = arude::config::base64_decode("Zm9v!A==");
-      }
-      catch(const arude::exception<>& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::exception<>>(
+        [&call] -> void
+        {
+          call = std::source_location::current();
+          std::ignore = arude::config::base64_decode("Zm9v!A==");
+        });
 
       THEN("the failure is raised at the call and not inside the decoder")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
+        REQUIRE(call_site_test::raised_at(failure, call));
       }
     }
 
     WHEN("it is given to a payload")
     {
       auto payload = arude::config::binary{};
-      auto failure = std::optional<arude::exception<>>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        payload.base64("Zm9");
-      }
-      catch(const arude::exception<>& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::exception<>>(
+        [&call, &payload] -> void
+        {
+          call = std::source_location::current();
+          payload.base64("Zm9");
+        });
 
       THEN("the failure is raised at the call")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
+        REQUIRE(call_site_test::raised_at(failure, call));
       }
     }
   }
@@ -383,26 +360,20 @@ SCENARIO("a write the transport cannot make is reported where store() was called
 
     WHEN("it is stored")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        document.store();
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &document] -> void
+        {
+          call = std::source_location::current();
+          document.store();
+        });
 
       THEN("it is an io_error raised at the store(), quoting the filesystem error as text")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::io_error);
-        REQUIRE(failure.value().str().contains("could not be written"));
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
-        REQUIRE(call_site_test::reads_as_one_failure(failure.value()));
+        REQUIRE(failure.data() == arude::config::config_error::io_error);
+        REQUIRE(failure.str().contains("could not be written"));
+        REQUIRE(call_site_test::raised_at(failure, call));
+        REQUIRE(call_site_test::reads_as_one_failure(failure));
       }
     }
   }
@@ -419,71 +390,53 @@ SCENARIO("the manager reports a failure where it was asked", "[config][call_site
 
     WHEN("a type registered nowhere is asked for")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        std::ignore = manager.get<test_helpers::config_test_t>();
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &manager] -> void
+        {
+          call = std::source_location::current();
+          std::ignore = manager.get<test_helpers::config_test_t>();
+        });
 
       THEN("it is a not_found raised at the get()")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::not_found);
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
+        REQUIRE(failure.data() == arude::config::config_error::not_found);
+        REQUIRE(call_site_test::raised_at(failure, call));
       }
     }
 
     WHEN("the same location is registered again")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        std::ignore =
-          manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &manager, &file] -> void
+        {
+          call = std::source_location::current();
+          std::ignore =
+            manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+        });
 
       THEN("it is an already_registered_location raised at the call")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::already_registered_location);
-        REQUIRE(std::string_view{failure.value().where().file_name()} == std::string_view{call.file_name()});
+        REQUIRE(failure.data() == arude::config::config_error::already_registered_location);
+        REQUIRE(std::string_view{failure.where().file_name()} == std::string_view{call.file_name()});
       }
     }
 
     WHEN("every document is loaded, and the file is not there")
     {
-      auto failure = std::optional<arude::config::exception_t>{};
       auto call = std::source_location{};
-
-      try
-      {
-        call = std::source_location::current();
-        manager.load_all(arude::config::load_policy::none);
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        failure = ex;
-      }
+      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
+        [&call, &manager] -> void
+        {
+          call = std::source_location::current();
+          manager.load_all(arude::config::load_policy::none);
+        });
 
       THEN("it is a not_found raised at the load_all()")
       {
-        REQUIRE(failure.has_value());
-        REQUIRE(failure.value().data() == arude::config::config_error::not_found);
-        REQUIRE(call_site_test::raised_at(failure.value(), call));
+        REQUIRE(failure.data() == arude::config::config_error::not_found);
+        REQUIRE(call_site_test::raised_at(failure, call));
       }
     }
   }

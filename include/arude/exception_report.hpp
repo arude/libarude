@@ -27,6 +27,7 @@
 #include <format>
 #include <string>
 #include <system_error>
+#include <utility>
 
 ///
 /// Most levels of nested exception arude::exception_report() will unwind.
@@ -113,6 +114,106 @@ inline exception_report_guard::~exception_report_guard()
 inline auto exception_report_guard::exhausted() const -> bool
 {
   return level_ > ARUDE_EXCEPTION_REPORT_MAX_DEPTH;
+}
+
+///
+/// One link of a chain of nested exceptions, as arude::exception_message()
+/// reads it.
+///
+struct exception_link
+{
+  ///
+  /// The message of the exception at this link.
+  ///
+  exception_string_t message;
+
+  ///
+  /// The exception nested in it, or null where there is none.
+  ///
+  std::exception_ptr nested;
+};
+
+///
+/// Returns the exception nested in another, if there is one.
+/// Rethrowing is how a nested exception is reached without RTTI, the same route
+/// arude::exception_report() takes.
+///
+/// \param ex The exception, as caught.
+/// \return The nested exception, or null where there is none.
+///
+[[nodiscard]] auto nested_exception_of(const auto& ex) -> std::exception_ptr;
+
+///
+/// Reads the message of an exception and the exception nested in it.
+///
+/// \param eptr The exception. Must not be null.
+/// \return Its message, as arude::exception_message() describes it, and the
+///         exception nested in it.
+/// \throws std::bad_alloc If the message string cannot be allocated.
+///
+[[nodiscard]] auto read_exception_link(const std::exception_ptr& eptr) -> exception_link;
+
+///
+///
+auto nested_exception_of(const auto& ex) -> std::exception_ptr
+{
+  try
+  {
+    std::rethrow_if_nested(ex);
+  }
+  catch(...)
+  {
+    return std::current_exception();
+  }
+
+  return nullptr;
+}
+
+///
+///
+inline auto read_exception_link(const std::exception_ptr& eptr) -> exception_link
+{
+  try
+  {
+    std::rethrow_exception(eptr);
+  }
+  catch(const char chr)
+  {
+    return {.message = exception_string_t(1, chr), .nested = nullptr};
+  }
+  catch(const char* const str)
+  {
+    // A thrown null pointer is still a const char*, and no string to copy.
+    return {.message = str != nullptr ? str : "Unknown exception", .nested = nullptr};
+  }
+  catch(const short num)
+  {
+    return {.message = std::format("{}", num), .nested = nullptr};
+  }
+  catch(const int num)
+  {
+    return {.message = std::format("{}", num), .nested = nullptr};
+  }
+  catch(const float num)
+  {
+    return {.message = std::format("{}", num), .nested = nullptr};
+  }
+  catch(const double num)
+  {
+    return {.message = std::format("{}", num), .nested = nullptr};
+  }
+  catch(const exception_base& ex)
+  {
+    return {.message = ex.str(), .nested = nested_exception_of(ex)};
+  }
+  catch(const std::exception& ex)
+  {
+    return {.message = ex.what(), .nested = nested_exception_of(ex)};
+  }
+  catch(...)
+  {
+    return {.message = "Unknown exception", .nested = nullptr};
+  }
 }
 
 } // namespace arude::detail
@@ -298,72 +399,14 @@ inline auto exception_message() -> exception_string_t
   // depth limit without the guard exception_report() needs.
   for(auto depth = 0; current != nullptr && depth < ARUDE_EXCEPTION_REPORT_MAX_DEPTH; ++depth)
   {
-    auto nested = std::exception_ptr{};
-
-    // Rethrowing is how a nested exception is reached without RTTI, the same
-    // route exception_report() takes.
-    const auto nested_of = [&nested](const auto& ex) -> void
-    {
-      try
-      {
-        std::rethrow_if_nested(ex);
-      }
-      catch(...)
-      {
-        nested = std::current_exception();
-      }
-    };
-
     if(depth > 0)
     {
       message += ": ";
     }
 
-    try
-    {
-      std::rethrow_exception(current);
-    }
-    catch(const char chr)
-    {
-      message += chr;
-    }
-    catch(const char* const str)
-    {
-      // A thrown null pointer is still a const char*, and no string to copy.
-      message += str != nullptr ? str : "Unknown exception";
-    }
-    catch(const short num)
-    {
-      message += std::format("{}", num);
-    }
-    catch(const int num)
-    {
-      message += std::format("{}", num);
-    }
-    catch(const float num)
-    {
-      message += std::format("{}", num);
-    }
-    catch(const double num)
-    {
-      message += std::format("{}", num);
-    }
-    catch(const exception_base& ex)
-    {
-      message += ex.str();
-      nested_of(ex);
-    }
-    catch(const std::exception& ex)
-    {
-      message += ex.what();
-      nested_of(ex);
-    }
-    catch(...)
-    {
-      message += "Unknown exception";
-    }
-
-    current = nested;
+    auto link = detail::read_exception_link(current);
+    message += link.message;
+    current = std::move(link.nested);
   }
 
   return message;

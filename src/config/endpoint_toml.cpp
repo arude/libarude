@@ -51,17 +51,10 @@ auto read_toml_document(const std::string_view text, const std::string_view sour
 
 ///
 ///
-auto write_toml_document([[maybe_unused]] const toml::table& document) -> std::string
+auto write_toml_document(const toml::table& document) -> std::string
 {
   auto stream = std::ostringstream{};
-
-#if !(defined __clang_analyzer__)
-  // Hidden from clang-analyzer, which follows the print into toml++'s
-  // formatter and reports a reference formed from a null pointer there, on a
-  // pointer the formatter's constructor sets from a reference. The report
-  // lands in toml++'s own file, where no NOLINT of ours can reach it.
   stream << document;
-#endif // #if !(defined __clang_analyzer__)
 
   return std::move(stream).str();
 }

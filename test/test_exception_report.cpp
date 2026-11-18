@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <utility>
 
 namespace
 {
@@ -414,7 +415,7 @@ SCENARIO("exception_message returns the message alone", "[exception_report]")
           // Throwing a raw pointer is one of the cases under test, as for
           // exception_report above.
           // NOLINTNEXTLINE(misc-throw-by-value-catch-by-reference)
-          throw value;
+          throw std::move(value);
         }
         catch(...)
         {
