@@ -69,8 +69,11 @@ cleaner interface, take the interface.
   compiler generate it.
 - `explicit` on single-argument constructors, except copy/move and transparent
   wrappers.
-- Destructor `virtual` if the class has any virtual function, `protected` if
-  the type must not be deleted through a base pointer.
+- A base class with virtual functions has a destructor that is either `public`
+  and `virtual`, where objects are deleted through the base, or `protected` and
+  non-virtual, where they must not be. Never `protected` and `virtual`: the
+  `protected` already forbids deleting through the base, so the `virtual`
+  buys nothing. `cppcoreguidelines-virtual-class-destructor` enforces this.
 - Copy and move only where they mean something; otherwise `= delete` or
   inherit `arude::noncopyable`.
 
