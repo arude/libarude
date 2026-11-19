@@ -92,7 +92,6 @@
 #include "arude/config/tree_reader.hpp"
 #include "arude/config/tree_writer.hpp"
 #include "arude/config/type_registry.hpp"
-#include "arude/exception_report.hpp"
 #include "arude/type_key.hpp"
 
 #include <algorithm>
@@ -812,7 +811,7 @@ auto document<E, Tr>::guarded(
   catch(...)
   {
     throw exception_t{
-      std::format("arude::config: '{}' could not be {}: {}", carrier_.location(), action, exception_message()),
+      std::format("arude::config: '{}' could not be {}: {}", carrier_.location(), action, detail::nested_message()),
       error,
       loc};
   }

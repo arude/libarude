@@ -40,7 +40,6 @@
 #include "arude/config/tree_reader.hpp"
 #include "arude/config/tree_writer.hpp"
 #include "arude/exception.hpp"
-#include "arude/exception_report.hpp"
 #include "arude/type_name.hpp"
 
 #include <rfl/Generic.hpp>
@@ -235,8 +234,9 @@ template<configuration_c T>
 /// for T. Where the node is the root, the keys in foreign are not seen, nor on
 /// a strict read are those root_hidden() adds.
 ///
-/// Throws a plain arude::exception where the node does not hold a T; the
-/// caller is what wraps it with the source and the error code.
+/// Throws a plain arude::exception where the node does not hold a T. Its
+/// message is reflect-cpp's reason alone: the caller is what wraps it with the
+/// source, the type or version and the error code, so it names neither.
 ///
 /// \tparam T Configuration type.
 /// \param tree The tree.
@@ -539,8 +539,7 @@ auto read_tree_hiding(const tree_reader& tree, const tree_node node, const key_s
 
   if(!result.has_value())
   {
-    throw exception{
-      std::format("arude::config: it does not hold a {}: {}", type_name<T>(), error_text(result.error()))};
+    throw exception{std::format("arude::config: {}", error_text(result.error()))};
   }
 
   return std::move(result).value();
@@ -574,7 +573,7 @@ auto parse_section(
   catch(...)
   {
     throw exception_t{
-      std::format("arude::config: {} declares no configuration version: {}", source, exception_message()),
+      std::format("arude::config: {} declares no configuration version: {}", source, detail::nested_message()),
       config_error::invalid_payload,
       loc};
   }
@@ -591,7 +590,7 @@ auto parse_section(
     catch(...)
     {
       throw exception_t{
-        std::format("arude::config: {} is not a {}: {}", source, type_name<T>(), exception_message()),
+        std::format("arude::config: {} is not a valid {}: {}", source, type_name<T>(), detail::nested_message()),
         config_error::invalid_payload,
         loc};
     }
@@ -613,7 +612,11 @@ auto parse_section(
   {
     throw exception_t{
       std::format(
-        "arude::config: {} cannot be migrated to version {}: {}", source, version_of<T>(), exception_message()),
+        "arude::config: {} is version {} and cannot be migrated to version {}: {}",
+        source,
+        version,
+        version_of<T>(),
+        detail::nested_message()),
       config_error::invalid_version,
       loc};
   }
@@ -854,7 +857,7 @@ auto write_section(
     const auto target = name.empty() ? std::string_view{"the document"} : name;
 
     throw exception_t{
-      std::format("arude::config: {} could not be written: {}", target, exception_message()),
+      std::format("arude::config: {} could not be written: {}", target, detail::nested_message()),
       config_error::io_error,
       loc};
   }

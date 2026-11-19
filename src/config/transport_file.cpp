@@ -9,7 +9,6 @@
 
 #include "arude/config/transport_file.hpp"
 #include "arude/config/common.hpp"
-#include "arude/exception_report.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -78,7 +77,7 @@ auto read_file(const std::filesystem::path& path, const std::source_location loc
   catch(...)
   {
     throw exception_t{
-      std::format("arude::config: failed while reading '{}': {}", path.string(), exception_message()),
+      std::format("arude::config: failed while reading '{}': {}", path.string(), detail::nested_message()),
       config_error::io_error,
       loc};
   }

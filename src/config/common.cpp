@@ -8,6 +8,7 @@
 ///
 
 #include "arude/config/common.hpp"
+#include "arude/exception_report.hpp"
 
 #include <cstddef>
 #include <span>
@@ -25,6 +26,37 @@ const int library_built_with_exception_runtime_error_base = 0;
 #else
 const int library_built_without_exception_runtime_error_base = 0;
 #endif // #if (defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+
+///
+///
+auto nested_message() -> std::string
+{
+  auto message = std::string{exception_message()};
+
+  // Only where a message of ours begins: at the start, or after the ": " with
+  // which a message quoting another one, ours or reflect-cpp's, introduces it.
+  // Anywhere else the text is a path, a key or a value somebody wrote, and is
+  // quoted as it is.
+  static constexpr auto separator = std::string_view{": "};
+
+  for(auto at = message.find(message_prefix); at != std::string::npos; at = message.find(message_prefix, at))
+  {
+    const auto starts_message =
+      at == 0 || (at >= separator.size() &&
+                  std::string_view{message}.substr(at - separator.size(), separator.size()) == separator);
+
+    if(starts_message)
+    {
+      message.erase(at, message_prefix.size());
+    }
+    else
+    {
+      at += message_prefix.size();
+    }
+  }
+
+  return message;
+}
 
 } // namespace arude::config::detail
 

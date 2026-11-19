@@ -11,13 +11,18 @@
 #include "arude/exception.hpp"
 #include "test/helpers/config_test_v1.hpp"
 #include "test/helpers/config_test_v2.hpp"
+#include "test/helpers/temp_directory.hpp"
 #include "test/helpers/temp_file.hpp"
+#include "test/helpers/write_text.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
 #include <cstddef>
 #include <exception>
+#include <filesystem>
+#include <format>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
@@ -181,6 +186,73 @@ SCENARIO("text that is not a configuration says so", "[config][toml]")
     THEN("it is refused rather than assumed to be version zero")
     {
       REQUIRE_THROWS_AS(arude::config::toml_version(text), arude::exception_base);
+    }
+  }
+}
+
+SCENARIO("a failure message carries one prefix and quotes what was written as written", "[config][toml]")
+{
+  GIVEN("a store below a directory whose name spells the library's prefix, where a file blocks the way")
+  {
+    const auto root = test_helpers::temp_directory{"arude_endpoint_toml_prefix_path"};
+    const auto spelled = root.path() / "arude::config: d";
+    std::filesystem::create_directories(spelled);
+    test_helpers::write_text(spelled / "blocker", "x");
+    const auto blocked = spelled / "blocker" / "sub";
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{blocked / "app.toml"});
+    auto section = document.add_root<test_helpers::config_test_t>();
+    section.set(test_helpers::config_test_t{});
+
+    THEN("the nested filesystem error still quotes the path as it was written")
+    {
+      try
+      {
+        document.store();
+        FAIL("a store below a regular file should have been refused");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        const auto message = std::string{ex.str()};
+        INFO(std::format("The message is: {}", message));
+        REQUIRE(ex.data() == arude::config::config_error::io_error);
+        REQUIRE(message.starts_with("arude::config: "));
+        REQUIRE(!message.substr(1).starts_with("arude::config: "));
+        REQUIRE(message.contains(std::format("[{}]", blocked.string())));
+      }
+    }
+  }
+
+  GIVEN("a configuration whose binary field is not base64, quoted by reflect-cpp")
+  {
+    static constexpr auto text = std::string_view{"version = 2\nname = \"bad\"\nsecret = \"@@@@\"\n"};
+
+    THEN("the prefix appears once, though the message passed through reflect-cpp and back")
+    {
+      try
+      {
+        std::ignore = arude::config::from_toml<test_helpers::config_test_t>(text);
+        FAIL("a malformed payload should have been refused");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        const auto message = std::string{ex.str()};
+        INFO(std::format("The message is: {}", message));
+        REQUIRE(ex.data() == arude::config::config_error::invalid_payload);
+
+        auto count = std::size_t{0};
+
+        for(auto at = message.find("arude::config: "); at != std::string::npos;
+            at = message.find("arude::config: ", at + 1))
+        {
+          ++count;
+        }
+
+        REQUIRE(count == 1);
+        REQUIRE(message.contains("base64"));
+      }
     }
   }
 }

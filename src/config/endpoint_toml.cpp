@@ -14,7 +14,6 @@
 #include "arude/config/toml_tree_reader.hpp"
 #include "arude/config/toml_tree_writer.hpp"
 #include "arude/config/tree_reader.hpp"
-#include "arude/exception_report.hpp"
 
 #include <toml++/toml.hpp>
 
@@ -43,7 +42,7 @@ auto read_toml_document(const std::string_view text, const std::string_view sour
     // which is not an arude::exception and would walk past every handler a
     // caller of this subsystem has.
     throw exception_t{
-      std::format("arude::config: '{}' is not valid TOML: {}", source, exception_message()),
+      std::format("arude::config: '{}' is not valid TOML: {}", source, detail::nested_message()),
       config_error::invalid_payload,
       loc};
   }
@@ -101,7 +100,7 @@ auto toml_version(const std::string_view text, const std::source_location loc) -
   {
     throw exception_t{
       std::format(
-        "arude::config: '{}' declares no configuration version: {}", detail::text_source, exception_message()),
+        "arude::config: '{}' declares no configuration version: {}", detail::text_source, detail::nested_message()),
       config_error::invalid_payload,
       loc};
   }

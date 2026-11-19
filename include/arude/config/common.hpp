@@ -207,4 +207,26 @@ namespace arude::config::detail
 ///
 using key_set_t = std::flat_set<std::string, std::less<>>;
 
+///
+/// The prefix every message of the configuration support starts with.
+///
+inline constexpr auto message_prefix = std::string_view{"arude::config: "};
+
+///
+/// Returns the message of the exception being handled, for quoting inside
+/// another message.
+/// A message quoted this way usually comes from the configuration support
+/// itself, sometimes by way of reflect-cpp, which puts its own text around it;
+/// either way it carries message_prefix, and the outer message already starts
+/// with it. The prefix is removed wherever a message begins, at the start or
+/// after a ": ", so a report reads as one sentence with one prefix rather than
+/// repeating it at each level. The same text inside a path, a key or a value
+/// is left as it was written.
+///
+/// Call it only from inside a catch block, as arude::exception_message().
+///
+/// \return The message, as arude::exception_message() describes it, without message_prefix.
+///
+[[nodiscard]] auto nested_message() -> std::string;
+
 } // namespace arude::config::detail
