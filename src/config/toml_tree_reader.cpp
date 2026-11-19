@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -158,7 +159,23 @@ auto toml_tree_reader::to_int64(const tree_node node) const -> std::expected<std
 ///
 auto toml_tree_reader::to_uint64(const tree_node node) const -> std::expected<std::uint64_t, std::string>
 {
-  return converted<std::uint64_t>(node);
+  // A TOML integer is a signed 64-bit one, and rfl::toml::Reader casts it to
+  // an unsigned one as it is, so -1 would come back as the largest value
+  // there is. Read signed, and refuse a negative one.
+  const auto value = converted<std::int64_t>(node);
+
+  if(!value.has_value())
+  {
+    return std::unexpected{value.error()};
+  }
+
+  if(value.value() < 0)
+  {
+    return std::unexpected{
+      std::format("the integer {} is negative, where an unsigned one is expected.", value.value())};
+  }
+
+  return static_cast<std::uint64_t>(value.value());
 }
 
 ///

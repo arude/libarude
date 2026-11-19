@@ -26,6 +26,7 @@
 
 #include "arude/config/common.hpp"
 #include "arude/non_owning_t.hpp"
+#include "arude/type_name.hpp"
 
 #include <rfl/always_false.hpp>
 #include <rfl/Result.hpp>
@@ -36,6 +37,7 @@
 #include <exception>
 #include <expected>
 #include <format>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -589,10 +591,13 @@ private: // Helpers
 
   ///
   /// Turns a conversion's result into reflect-cpp's.
+  /// An integer that does not fit T is an error rather than a cast: a tree
+  /// hands integers over at 64 bits, and narrowing one silently would read a
+  /// port of 70000 as 4464.
   ///
   /// \tparam T The type reflect-cpp asked for.
   /// \param converted The conversion's result.
-  /// \return The value, cast to T, or the message as an error.
+  /// \return The value, as a T, or the message as an error.
   ///
   template<typename T>
   [[nodiscard]] static auto converted_to(auto converted) -> rfl::Result<T>;
@@ -806,12 +811,28 @@ auto rfl_tree_reader::shielded(const std::invocable auto& call) const noexcept -
 template<typename T>
 auto rfl_tree_reader::converted_to(auto converted) -> rfl::Result<T>
 {
+  using value_t = std::remove_cvref_t<T>;
+
   if(!converted.has_value())
   {
     return rfl::error(std::move(converted).error());
   }
 
-  return static_cast<std::remove_cvref_t<T>>(std::move(converted).value());
+  if constexpr(std::integral<value_t> && !std::same_as<value_t, bool>)
+  {
+    if(!std::in_range<value_t>(converted.value()))
+    {
+      return rfl::error(
+        std::format(
+          "the integer {} is out of range, as {} holds {} to {}.",
+          converted.value(),
+          type_name<value_t>(),
+          std::numeric_limits<value_t>::min(),
+          std::numeric_limits<value_t>::max()));
+    }
+  }
+
+  return static_cast<value_t>(std::move(converted).value());
 }
 
 } // namespace arude::config::detail

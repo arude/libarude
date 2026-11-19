@@ -19,9 +19,11 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -43,6 +45,27 @@ namespace endpoint_toml_test
   return test_helpers::config_test_t{
     .name = "example", .retries = 7, .endpoint = "example.invalid", .secret = arude::config::binary{secret}};
 }
+
+///
+/// A configuration with a field narrower than the 64 bits a tree hands over.
+///
+struct narrow
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// A count that holds 0 to 255.
+  ///
+  std::uint8_t count = 0;
+};
 
 } // namespace endpoint_toml_test
 
@@ -159,9 +182,27 @@ SCENARIO("text of the wrong version is refused rather than reinterpreted", "[con
       REQUIRE(arude::config::toml_version(text) == 99);
     }
 
-    THEN("migrating it is refused rather than guessed at")
+    THEN("migrating it, or reading it as it is, is refused as a version too new, not guessed at")
     {
-      REQUIRE_THROWS_AS(arude::config::from_toml_migrated<test_helpers::config_test_t>(text), arude::exception_base);
+      const auto require_too_new = [](const std::function<void()>& read) -> void
+      {
+        try
+        {
+          read();
+          FAIL("text newer than this build should have been refused");
+        }
+        catch(const arude::config::exception_t& ex)
+        {
+          INFO(std::format("The message is: {}", ex.str()));
+          REQUIRE(ex.data() == arude::config::config_error::invalid_version);
+          REQUIRE(ex.str().contains("version 99"));
+          REQUIRE(ex.str().contains("newer"));
+        }
+      };
+
+      require_too_new(
+        [] -> void { std::ignore = arude::config::from_toml_migrated<test_helpers::config_test_t>(text); });
+      require_too_new([] -> void { std::ignore = arude::config::from_toml<test_helpers::config_test_t>(text); });
     }
   }
 }
@@ -186,6 +227,76 @@ SCENARIO("text that is not a configuration says so", "[config][toml]")
     THEN("it is refused rather than assumed to be version zero")
     {
       REQUIRE_THROWS_AS(arude::config::toml_version(text), arude::exception_base);
+    }
+  }
+
+  GIVEN("TOML whose unsigned field holds a negative number")
+  {
+    static constexpr auto text = std::string_view{"version = 2\nname = \"negative\"\nretries = -1\n"};
+
+    THEN("it is refused rather than wrapped round to a very large number")
+    {
+      try
+      {
+        std::ignore = arude::config::from_toml<test_helpers::config_test_t>(text);
+        FAIL("a negative unsigned field should have been refused");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        INFO(std::format("The message is: {}", ex.str()));
+        REQUIRE(ex.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(ex.str().contains("-1"));
+      }
+    }
+  }
+
+  GIVEN("TOML whose field holds a number too large for the field's type")
+  {
+    static constexpr auto text = std::string_view{"version = 1\ncount = 300\n"};
+
+    THEN("it is refused rather than cut down to what fits")
+    {
+      try
+      {
+        std::ignore = arude::config::from_toml<endpoint_toml_test::narrow>(text);
+        FAIL("a value out of the field's range should have been refused");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        INFO(std::format("The message is: {}", ex.str()));
+        REQUIRE(ex.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(ex.str().contains("300"));
+        REQUIRE(ex.str().contains("out of range"));
+      }
+    }
+  }
+
+  GIVEN("TOML whose version is negative")
+  {
+    static constexpr auto text = std::string_view{"version = -1\nname = \"negative\"\n"};
+
+    THEN("it is refused as malformed, not mistaken for a version from a newer build")
+    {
+      const auto require_malformed = [](const std::function<void()>& read) -> void
+      {
+        try
+        {
+          read();
+          FAIL("a negative version should have been refused");
+        }
+        catch(const arude::config::exception_t& ex)
+        {
+          INFO(std::format("The message is: {}", ex.str()));
+          REQUIRE(ex.data() == arude::config::config_error::invalid_payload);
+          REQUIRE(ex.str().contains("-1"));
+          REQUIRE(!ex.str().contains("newer"));
+        }
+      };
+
+      require_malformed([] -> void { std::ignore = arude::config::toml_version(text); });
+      require_malformed([] -> void { std::ignore = arude::config::from_toml<test_helpers::config_test_t>(text); });
+      require_malformed(
+        [] -> void { std::ignore = arude::config::from_toml_migrated<test_helpers::config_test_t>(text); });
     }
   }
 }

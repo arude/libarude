@@ -13,6 +13,7 @@
 #include "arude/exception.hpp"
 
 #include <format>
+#include <optional>
 #include <string_view>
 
 namespace arude::config::detail
@@ -90,6 +91,37 @@ auto acquire_subtree(const tree_reader& tree, const std::string_view name) -> tr
   }
 
   return found.value();
+}
+
+///
+///
+auto probe_version(const tree_reader& tree, const tree_node node, const key_set_t& foreign) -> version_t
+{
+  // Never strict: the probe declares the version key alone, and every other
+  // key is there for the type the node is read as next.
+  return read_tree<endpoint_probe>(tree, node, foreign, false).version;
+}
+
+///
+///
+auto declared_version(const tree_reader& tree, const std::string_view name, const key_set_t& foreign)
+  -> std::optional<version_t>
+{
+  if(!section_present(tree, name, foreign))
+  {
+    return std::nullopt;
+  }
+
+  // A section that is there but declares no readable version is not this
+  // function's to report: whoever reads it next says what is wrong with it.
+  try
+  {
+    return probe_version(tree, acquire_subtree(tree, name), foreign);
+  }
+  catch(...)
+  {
+    return std::nullopt;
+  }
 }
 
 } // namespace arude::config::detail

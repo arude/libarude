@@ -128,6 +128,24 @@ public:
   virtual auto write_into(tree_writer& tree) const -> void = 0;
 
   ///
+  /// Refuses to be written over a newer version of itself.
+  /// Asked by every store() of the tree it is about to write into. A section a
+  /// newer build wrote cannot be brought back to this one's type, and writing
+  /// this one's value over it would mix the two versions in one table. A load
+  /// does not settle it for good: a section attached after the load was never
+  /// checked against the tree it read. A no-op while the section is
+  /// disengaged, as it is then not written.
+  ///
+  /// \param tree The endpoint's reader over the tree about to be written into. Not retained.
+  /// \param foreign The names of the registered named sections.
+  /// \param loc The call site a failure reports.
+  /// \throws exception_t With invalid_version if the tree holds the section in
+  ///                     a version newer than its type.
+  ///
+  virtual auto refuse_newer(const tree_reader& tree, const key_set_t& foreign, std::source_location loc) const
+    -> void = 0;
+
+  ///
   /// Reports whether a value is cached.
   /// \return true if the section was loaded or set at least once.
   ///
@@ -201,8 +219,11 @@ public:
   ///                     with invalid_payload if the source has to be read
   ///                     first and does not parse, in which case it is left
   ///                     as it is and discard_source() is the way past; with
-  ///                     the transport's own error, or io_error, if the read
-  ///                     or the write fails.
+  ///                     invalid_version if the source holds an engaged
+  ///                     section in a version newer than its type, which a
+  ///                     newer build wrote, in which case it is left as it is
+  ///                     too; with the transport's own error, or io_error, if
+  ///                     the read or the write fails.
   ///
   virtual auto store(std::source_location loc) -> void = 0;
 
@@ -211,8 +232,9 @@ public:
   /// hold and nothing else.
   /// No read happens, and every key, table and section the engaged sections
   /// do not hold is dropped from the source by the next store(). That is
-  /// what it is for: replacing a source that does not parse, which store()
-  /// otherwise refuses to write over. Section values are untouched, and a
+  /// what it is for: replacing a source that store() otherwise refuses to
+  /// write over, because it does not parse or holds a section a newer build
+  /// wrote. Section values are untouched, and a
   /// disengaged section is still not written. Lasts until the next load().
   ///
   virtual auto discard_source() -> void = 0;

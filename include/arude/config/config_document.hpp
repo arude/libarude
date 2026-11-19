@@ -21,8 +21,10 @@
 ///     starts from it, so a table nobody registered survives untouched, down
 ///     to the type of every value in it. Until the first load(), every
 ///     store() reads the source first, for the same reason: what the document
-///     has not looked at is not its to wipe. discard_source() is the one way
-///     to say otherwise, for a source that does not parse.
+///     has not looked at is not its to wipe. Nor is a section a newer build
+///     wrote: store() refuses to write an older version over it.
+///     discard_source() is the one way to say otherwise, for a source that
+///     does not parse or holds such a section.
 ///   - A section holds std::optional<T>. Disengaged — never loaded, never
 ///     set — means its subtree is left exactly as parsed, not written from
 ///     defaults. A section added after a load cannot clobber a value already
@@ -340,6 +342,11 @@ public: // Overrides
   auto write_into(tree_writer& tree) const -> void override;
 
   ///
+  /// \see section_base::refuse_newer
+  ///
+  auto refuse_newer(const tree_reader& tree, const key_set_t& foreign, std::source_location loc) const -> void override;
+
+  ///
   /// \see section_base::engaged
   ///
   [[nodiscard]] auto engaged() const -> bool override;
@@ -451,6 +458,33 @@ auto section<T>::write_into(tree_writer& tree) const -> void
   // just written, they would no longer name a key that the loaded tree holds
   // and the value has since dropped, and the next store() would put it back.
   detail::write_section_value<T>(tree, name_, value_.value(), owned_keys_);
+}
+
+///
+///
+template<configuration_c T>
+auto section<T>::refuse_newer(const tree_reader& tree, const key_set_t& foreign, const std::source_location loc) const
+  -> void
+{
+  if(!value_.has_value())
+  {
+    return;
+  }
+
+  const auto found = detail::declared_version(tree, name_, foreign);
+
+  if(found.has_value() && found.value() > version_of<T>())
+  {
+    throw exception_t{
+      std::format(
+        "arude::config: {} in the source is version {}, newer than version {}, the newest this build knows, and "
+        "storing would overwrite it.",
+        section_label(name_),
+        found.value(),
+        version_of<T>()),
+      config_error::invalid_version,
+      loc};
+  }
 }
 
 ///
@@ -621,6 +655,21 @@ auto document<E, Tr>::store(const std::source_location loc) -> void
     // owned keys to go with it. source_known_ never goes back to false, so
     // where it is false still, the read above happened.
     output = source_known_ ? parsed_ : std::move(unknown_source).value_or(document_t{});
+
+    // A section a newer build wrote must not be overwritten with this build's
+    // older one. Asked of every section on every store, whatever the tree came
+    // from: a load() checked only the sections attached when it ran, a section
+    // added since then is in its tree unchecked, and the tree read above was
+    // never checked at all. One version probe per engaged section.
+    {
+      const auto foreign = subsection_names(sections_);
+      const auto tree = format_.make_reader(output);
+
+      for(const auto& section : sections_)
+      {
+        section->refuse_newer(tree, foreign, loc);
+      }
+    }
 
     guarded(
       "written",
@@ -918,8 +967,12 @@ public: // Methods
   ///                     with invalid_payload if the document was never
   ///                     loaded and the source does not parse, in which case
   ///                     the source is left as it is and discard_source() is
-  ///                     the way to replace it; with the transport's own
-  ///                     error, or io_error, if the read or the write fails.
+  ///                     the way to replace it; with invalid_version if the
+  ///                     source holds an engaged section in a version newer
+  ///                     than its type, which a newer build wrote, in which
+  ///                     case it is left as it is too; with the transport's
+  ///                     own error, or io_error, if the read or the write
+  ///                     fails.
   ///
   auto store(std::source_location loc = std::source_location::current()) -> void;
 
@@ -928,8 +981,9 @@ public: // Methods
   /// hold and nothing else.
   /// No read happens, and every key, table and section the engaged sections
   /// do not hold is dropped from the source by the next store(). That is
-  /// what it is for: replacing a source that does not parse, which store()
-  /// otherwise refuses to write over. Section values are untouched, and a
+  /// what it is for: replacing a source that store() otherwise refuses to
+  /// write over, because it does not parse or holds a section a newer build
+  /// wrote. Section values are untouched, and a
   /// disengaged section is still not written. Lasts until the next load().
   ///
   auto discard_source() -> void;

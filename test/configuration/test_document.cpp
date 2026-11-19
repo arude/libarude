@@ -502,6 +502,37 @@ auto require_refused(const std::function<void()>& action, const std::vector<std:
 }
 
 ///
+/// Requires a load to be refused with the error given.
+///
+/// \param document The document to load.
+/// \param policy The policy to load with.
+/// \param error The error the load must report.
+/// \param mentions Texts the message must contain.
+///
+auto require_refused_load(
+  arude::config::config_document_handle& document,
+  const arude::config::load_policy policy,
+  const arude::config::config_error error,
+  const std::vector<std::string>& mentions) -> void
+{
+  try
+  {
+    document.load(policy);
+    FAIL("the load should have been refused");
+  }
+  catch(const arude::config::exception_t& ex)
+  {
+    INFO(std::format("The message is: {}", ex.str()));
+    REQUIRE(ex.data() == error);
+
+    for(const auto& mention : mentions)
+    {
+      REQUIRE(ex.str().contains(mention));
+    }
+  }
+}
+
+///
 /// Requires a type to be registered nowhere in a manager's index.
 ///
 /// \tparam T Configuration type.
@@ -729,6 +760,157 @@ SCENARIO("per-section versions migrate independently", "[config][document]")
         {
           REQUIRE(ex.data() == arude::config::config_error::invalid_version);
         }
+      }
+    }
+  }
+}
+
+///
+///
+SCENARIO("a section written by a newer build is refused and left alone", "[config][document]")
+{
+  using arude::config::config_error;
+  using arude::config::load_policy;
+
+  // Version 3 of the network section, which this build has no type for: the
+  // newest it knows is network_v2. mtu stands for a field only version 3 has.
+  constexpr auto newer_network = std::string_view{"\n"
+                                                  "[network]\n"
+                                                  "version = 3\n"
+                                                  "host = \"new-host\"\n"
+                                                  "port = 1\n"
+                                                  "mtu = 1500\n"};
+
+  GIVEN("a file whose root is current and whose network section is version 3")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_newer_section.toml"};
+    const auto written = std::format("version = 1\nname = \"example\"\n{}", newer_network);
+    test_helpers::write_text(file.path(), written);
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto root = document.add_root<document_test::app>();
+    auto network = document.add_section<document_test::network_v2>("network");
+
+    WHEN("it is loaded, with upgrade_to_current or without")
+    {
+      for(const auto policy : {load_policy::upgrade_to_current, load_policy::none})
+      {
+        document_test::require_refused_load(
+          document, policy, config_error::invalid_version, {"network", "version 3", "newer"});
+      }
+
+      THEN("nothing was installed, not even the current root")
+      {
+        REQUIRE(!root.loaded());
+        REQUIRE(!network.loaded());
+      }
+    }
+
+    WHEN("the network section is set and stored with no load before it")
+    {
+      network.set(document_test::network_v2{.host = "old-build"});
+
+      try
+      {
+        document.store();
+        FAIL("a store over a newer section should have thrown");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        REQUIRE(ex.data() == config_error::invalid_version);
+        REQUIRE(std::string{ex.str()}.contains("newer"));
+      }
+
+      THEN("the source is exactly as the newer build wrote it")
+      {
+        REQUIRE(document_test::text_of(file.path()) == written);
+      }
+    }
+
+    WHEN("only the root is set and stored with no load before it")
+    {
+      root.set(document_test::app{.name = "renamed"});
+      document.store();
+
+      THEN("the root is written, and the newer section it does not own is kept as it was")
+      {
+        const auto text = document_test::text_of(file.path());
+        REQUIRE(text.contains("renamed"));
+
+        const auto network_keys = document_test::keys_in(file.path(), "network");
+        REQUIRE(network_keys.contains("mtu"));
+
+        auto reread = arude::config::config_manager{};
+        auto reread_document =
+          reread.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+        std::ignore = reread_document.add_section<document_test::network_v2>("network");
+        document_test::require_refused_load(
+          reread_document, load_policy::upgrade_to_current, config_error::invalid_version, {"newer"});
+      }
+    }
+  }
+
+  GIVEN("a document loaded with only its root, whose source holds the network section in version 3")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_newer_attached_late.toml"};
+    const auto written = std::format("version = 1\nname = \"example\"\n{}", newer_network);
+    test_helpers::write_text(file.path(), written);
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    std::ignore = document.add_root<document_test::app>();
+    document.load();
+
+    WHEN("the network section is added after the load, set and stored")
+    {
+      auto network = document.add_section<document_test::network_v2>("network");
+      network.set(document_test::network_v2{.host = "old-build"});
+
+      try
+      {
+        document.store();
+        FAIL("a store over a newer section should have thrown, though the section came after the load");
+      }
+      catch(const arude::config::exception_t& ex)
+      {
+        INFO(std::format("The message is: {}", ex.str()));
+        REQUIRE(ex.data() == config_error::invalid_version);
+        REQUIRE(ex.str().contains("newer"));
+      }
+
+      THEN("the source is exactly as the newer build wrote it")
+      {
+        REQUIRE(document_test::text_of(file.path()) == written);
+      }
+    }
+  }
+
+  GIVEN("a document loaded from version 2, whose source a newer build then rewrites as version 3")
+  {
+    const auto file = test_helpers::temp_file{"arude_document_newer_rewrite.toml"};
+    test_helpers::write_text(file.path(), "[network]\nversion = 2\nhost = \"current-host\"\nport = 80\n");
+
+    auto manager = arude::config::config_manager{};
+    auto document =
+      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto network = document.add_section<document_test::network_v2>("network");
+    document.load();
+
+    test_helpers::write_text(file.path(), newer_network);
+
+    WHEN("it is loaded again")
+    {
+      document_test::require_refused_load(
+        document, load_policy::upgrade_to_current, config_error::invalid_version, {"newer"});
+
+      THEN("the values of the first load are still the ones held")
+      {
+        REQUIRE(network.get().version == 2);
+        REQUIRE(network.get().host == "current-host");
+        REQUIRE(network.get().port == 80);
       }
     }
   }

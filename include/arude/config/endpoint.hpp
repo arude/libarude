@@ -230,6 +230,34 @@ template<configuration_c T>
 [[nodiscard]] auto acquire_subtree(const tree_reader& tree, std::string_view name) -> tree_node;
 
 ///
+/// Reads the version a node declares.
+///
+/// \param tree The tree.
+/// \param node The node holding the version key.
+/// \param foreign The names of the registered named sections, which the root does not see.
+/// \return The version.
+/// \throws arude::exception If the node declares no version, or one outside
+///                          the range of version_t, such as a negative one,
+///                          which the tree reader refuses rather than wraps.
+///
+[[nodiscard]] auto probe_version(const tree_reader& tree, tree_node node, const key_set_t& foreign) -> version_t;
+
+///
+/// Returns the version a section declares in a tree, where it is there and
+/// declares one.
+/// What store() asks before writing over a source no load() has read: a
+/// section written by a newer build must not be overwritten with an older one.
+///
+/// \param tree The tree.
+/// \param name The section name, or empty for the root.
+/// \param foreign The names of the registered named sections.
+/// \return The version, or std::nullopt if the section is not in the tree or
+///         declares no readable version.
+///
+[[nodiscard]] auto declared_version(const tree_reader& tree, std::string_view name, const key_set_t& foreign)
+  -> std::optional<version_t>;
+
+///
 /// Reads a configuration out of a node of a tree, through reflect-cpp's parser
 /// for T. Where the node is the root, the keys in foreign are not seen, nor on
 /// a strict read are those root_hidden() adds.
@@ -270,8 +298,8 @@ template<configuration_c T>
 ///
 /// The version decision for one section.
 /// Probes the version in the section's own subtree, returns the exact match,
-/// rejects any other version unless upgrade_to_current is given, and migrates
-/// otherwise. Reads as strictly as tree.options() says.
+/// refuses a newer version whatever the policy, rejects an older one unless
+/// upgrade_to_current is given, and migrates it otherwise. Reads as strictly as tree.options() says.
 ///
 /// A named section that is not in the tree is an invalid_payload here, as it
 /// declares no version. A caller that tells an absent section from a malformed
@@ -566,9 +594,7 @@ auto parse_section(
     strict = tree.options().reject_unknown_fields;
     subtree = acquire_subtree(tree, name);
 
-    // Never strict: the probe declares the version key alone, and every other
-    // key is there for the type it is read as next.
-    version = read_tree<endpoint_probe>(tree, subtree, foreign, false).version;
+    version = probe_version(tree, subtree, foreign);
   }
   catch(...)
   {
@@ -594,6 +620,22 @@ auto parse_section(
         config_error::invalid_payload,
         loc};
     }
+  }
+
+  // Told apart from an older version, which a policy decides about. A newer
+  // one was written by a later build, and no policy can bring it back: this
+  // build has no type to read it as. Naming that is what tells the user to
+  // upgrade the application rather than to fix the file.
+  if(version > version_of<T>())
+  {
+    throw exception_t{
+      std::format(
+        "arude::config: {} is version {}, newer than version {}, the newest this build knows.",
+        source,
+        version,
+        version_of<T>()),
+      config_error::invalid_version,
+      loc};
   }
 
   if(!is_set(policy, load_policy::upgrade_to_current))

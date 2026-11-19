@@ -142,7 +142,10 @@ public: // Methods
   ///                     loaded and the source does not parse, in which case
   ///                     the source is left as it is and
   ///                     config_document_handle::discard_source() is the way
-  ///                     to replace it; with the transport's own error, or
+  ///                     to replace it; with invalid_version if the source
+  ///                     holds an engaged section in a version newer than its
+  ///                     type, which a newer build wrote, in which case it is
+  ///                     left as it is too; with the transport's own error, or
   ///                     io_error, if the read or the write fails.
   ///
   auto store(std::source_location loc = std::source_location::current()) -> void;

@@ -94,7 +94,7 @@ auto toml_version(const std::string_view text, const std::source_location loc) -
 
   try
   {
-    return detail::read_tree<detail::endpoint_probe>(tree, tree.root(), {}, false).version;
+    return detail::probe_version(tree, tree.root(), {});
   }
   catch(...)
   {
