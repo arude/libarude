@@ -559,6 +559,11 @@ struct app_config_v1
   /// The network member, carrying its own version.
   ///
   arude::config::versioned<net_v2> network;
+
+  ///
+  /// The day the configuration takes effect.
+  ///
+  std::chrono::year_month_day due{std::chrono::year{2026} / 8 / 17};
 };
 
 ///
@@ -600,6 +605,11 @@ struct app_config_v2
   /// \see app_config_v1::network
   ///
   arude::config::versioned<net_v2> network;
+
+  ///
+  /// \see app_config_v1::due
+  ///
+  std::chrono::year_month_day due{std::chrono::year{2026} / 8 / 17};
 };
 
 ///
@@ -629,14 +639,14 @@ using app_config_t = app_config_v2;
 ///
 constexpr auto upgrade(const app_config_v1& val) -> app_config_v2
 {
-  return app_config_v2{.name = val.name, .secret = val.secret, .network = val.network};
+  return app_config_v2{.name = val.name, .secret = val.secret, .network = val.network, .due = val.due};
 }
 
 ///
 ///
 constexpr auto downgrade(const app_config_v2& val) -> app_config_v1
 {
-  return app_config_v1{.name = val.name, .secret = val.secret, .network = val.network};
+  return app_config_v1{.name = val.name, .secret = val.secret, .network = val.network, .due = val.due};
 }
 
 } // namespace module_test
@@ -687,6 +697,7 @@ SCENARIO("a module consumer reads a versioned member", "[module][config]")
     static constexpr auto text = std::string_view{"version = 1\n"
                                                   "name = \"old\"\n"
                                                   "secret = \"\"\n"
+                                                  "due = 2026-08-17\n"
                                                   "[network]\n"
                                                   "version = 1\n"
                                                   "host = \"old-host\"\n"};
@@ -722,6 +733,14 @@ SCENARIO("the module carries the configuration specializations", "[module][confi
     {
       REQUIRE(text.contains("Zm9v"));
       REQUIRE(arude::config::from_toml<module_test::app_config_t>(text).secret == payload);
+    }
+
+    THEN("the calendar date round-trips as a native TOML date")
+    {
+      REQUIRE(text.contains("due = 2026-08-17"));
+      REQUIRE(
+        arude::config::from_toml<module_test::app_config_t>(text).due ==
+        std::chrono::year_month_day{std::chrono::year{2026} / 8 / 17});
     }
   }
 

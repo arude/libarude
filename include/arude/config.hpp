@@ -55,6 +55,7 @@
 #include "arude/config/toml.hpp"
 #include "arude/config/toml_parsers.hpp"
 #include "arude/config/toml_reader.hpp"
+#include "arude/config/toml_time.hpp"
 #include "arude/config/toml_writer.hpp"
 #include "arude/config/transport.hpp"
 #include "arude/config/transport_file.hpp"

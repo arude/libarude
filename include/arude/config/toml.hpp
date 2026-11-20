@@ -23,6 +23,7 @@
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
 #include "arude/config/toml_parsers.hpp"
+#include "arude/config/toml_time.hpp"
 #include "arude/config/versioned.hpp"
 #include "arude/type_name.hpp"
 

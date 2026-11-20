@@ -127,6 +127,11 @@ struct schedule
   /// How long to wait.
   ///
   std::chrono::seconds timeout{30};
+
+  ///
+  /// The day the schedule takes effect, a native TOML date.
+  ///
+  std::chrono::year_month_day due{std::chrono::year{2026} / 8 / 17};
 };
 
 ///
@@ -775,6 +780,12 @@ SCENARIO("a time-typed field is stored as reflect-cpp writes it", "[config][toml
         REQUIRE(stored["timeout"]["unit"].value<std::string>() == "seconds");
       }
 
+      THEN("the calendar date is a native TOML date")
+      {
+        REQUIRE(stored["due"].is_date());
+        REQUIRE(stored["due"].as_date()->get().year == 2026);
+      }
+
       THEN("both read back as they were")
       {
         config.load();
@@ -792,7 +803,8 @@ SCENARIO("a time-typed field is stored as reflect-cpp writes it", "[config][toml
       file.path(),
       "version = 1\n"
       "day = 2001-02-03\n"
-      "timeout = { count = 30, unit = \"seconds\" }\n");
+      "timeout = { count = 30, unit = \"seconds\" }\n"
+      "due = 2026-08-17\n");
 
     auto config = arude::config::config_file<toml_test::schedule, arude::config::transport_file>{
       arude::config::transport_file{file.path()}};
@@ -1003,10 +1015,10 @@ SCENARIO("a duration's count is converted exactly or refused", "[config][toml]")
   GIVEN("text holding a duration in the root's own unit, at the extremes of int64")
   {
     const auto max_text = std::format(
-      "version = 1\nday = \"2024-01-02\"\n[timeout]\ncount = {}\nunit = \"seconds\"\n",
+      "version = 1\nday = \"2024-01-02\"\ndue = 2026-08-17\n[timeout]\ncount = {}\nunit = \"seconds\"\n",
       std::numeric_limits<std::int64_t>::max());
     const auto min_text = std::format(
-      "version = 1\nday = \"2024-01-02\"\n[timeout]\ncount = {}\nunit = \"seconds\"\n",
+      "version = 1\nday = \"2024-01-02\"\ndue = 2026-08-17\n[timeout]\ncount = {}\nunit = \"seconds\"\n",
       std::numeric_limits<std::int64_t>::min());
 
     THEN("the maximum and the minimum count read back as themselves")
@@ -1022,8 +1034,8 @@ SCENARIO("a duration's count is converted exactly or refused", "[config][toml]")
 
   GIVEN("text whose count in a finer unit divides the target exactly")
   {
-    static constexpr auto text =
-      std::string_view{"version = 1\nday = \"2024-01-02\"\n[timeout]\ncount = 2000\nunit = \"milliseconds\"\n"};
+    static constexpr auto text = std::string_view{
+      "version = 1\nday = \"2024-01-02\"\ndue = 2026-08-17\n[timeout]\ncount = 2000\nunit = \"milliseconds\"\n"};
 
     THEN("it reads as the exact value")
     {
@@ -1033,8 +1045,8 @@ SCENARIO("a duration's count is converted exactly or refused", "[config][toml]")
 
   GIVEN("text whose count in a finer unit does not divide the target")
   {
-    static constexpr auto text =
-      std::string_view{"version = 1\nday = \"2024-01-02\"\n[timeout]\ncount = 1500\nunit = \"milliseconds\"\n"};
+    static constexpr auto text = std::string_view{
+      "version = 1\nday = \"2024-01-02\"\ndue = 2026-08-17\n[timeout]\ncount = 1500\nunit = \"milliseconds\"\n"};
 
     THEN("it is refused rather than truncated")
     {
@@ -1055,7 +1067,7 @@ SCENARIO("a duration's count is converted exactly or refused", "[config][toml]")
   GIVEN("text whose count overflows the target's unit")
   {
     const auto text = std::format(
-      "version = 1\nday = \"2024-01-02\"\n[timeout]\ncount = {}\nunit = \"years\"\n",
+      "version = 1\nday = \"2024-01-02\"\ndue = 2026-08-17\n[timeout]\ncount = {}\nunit = \"years\"\n",
       std::numeric_limits<std::int64_t>::max());
 
     THEN("it is refused rather than wrapped")
