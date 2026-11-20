@@ -11,6 +11,7 @@
 #include "arude/exception_report.hpp"
 
 #include <cstddef>
+#include <format>
 #include <span>
 #include <string>
 #include <string_view>
@@ -29,25 +30,25 @@ const int library_built_without_exception_runtime_error_base = 0;
 
 ///
 ///
-auto nested_message() -> std::string
+auto without_prefix(const std::string_view message) -> std::string
 {
-  auto message = std::string{exception_message()};
+  auto stripped = std::string{message};
 
-  // Only where a message of ours begins: at the start, or after the ": " with
-  // which a message quoting another one, ours or reflect-cpp's, introduces it.
-  // Anywhere else the text is a path, a key or a value somebody wrote, and is
-  // quoted as it is.
+  // Only where a message of ours begins: at the start, or after the ": "
+  // with which a message quoting another one, ours or reflect-cpp's,
+  // introduces it. Anywhere else the text is a path, a key or a value
+  // somebody wrote, and is quoted as it is.
   static constexpr auto separator = std::string_view{": "};
 
-  for(auto at = message.find(message_prefix); at != std::string::npos; at = message.find(message_prefix, at))
+  for(auto at = stripped.find(message_prefix); at != std::string::npos; at = stripped.find(message_prefix, at))
   {
     const auto starts_message =
       at == 0 || (at >= separator.size() &&
-                  std::string_view{message}.substr(at - separator.size(), separator.size()) == separator);
+                  std::string_view{stripped}.substr(at - separator.size(), separator.size()) == separator);
 
     if(starts_message)
     {
-      message.erase(at, message_prefix.size());
+      stripped.erase(at, message_prefix.size());
     }
     else
     {
@@ -55,7 +56,38 @@ auto nested_message() -> std::string
     }
   }
 
-  return message;
+  return stripped;
+}
+
+///
+///
+auto nested_message() -> std::string
+{
+  return without_prefix(exception_message());
+}
+
+///
+///
+auto rethrow_as(const config_error fallback, const std::string_view what, const std::source_location loc) -> void
+{
+  try
+  {
+    // Rethrows the exception being handled, whatever it is, so the handlers
+    // below see it rather than a copy.
+    throw;
+  }
+  catch(const exception_t&)
+  {
+    // An exception_t is what the caller reports; it is rethrown unchanged,
+    // code and call site included.
+    throw;
+  }
+  catch(...)
+  {
+    // Anything else, such as a transport's own std::exception, is not an
+    // exception_t and would walk past every handler a caller has.
+    throw exception_t{std::format("arude::config: {}: {}", what, nested_message()), fallback, loc};
+  }
 }
 
 } // namespace arude::config::detail

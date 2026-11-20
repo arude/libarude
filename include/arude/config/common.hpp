@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <flat_set>
 #include <functional>
+#include <source_location>
 #include <span>
 #include <string>
 #include <string_view>
@@ -213,20 +214,44 @@ using key_set_t = std::flat_set<std::string, std::less<>>;
 inline constexpr auto message_prefix = std::string_view{"arude::config: "};
 
 ///
+/// Returns text with message_prefix removed wherever a message begins.
+/// The prefix is removed at the start, and after the ": " with which a
+/// message quoting another one, ours or reflect-cpp's, introduces it, so a
+/// report reads as one sentence with one prefix rather than repeating it at
+/// each level. The same text inside a path, a key or a value is left as it
+/// was written.
+///
+/// \param message The text to strip. Not retained.
+/// \return The text without message_prefix.
+///
+[[nodiscard]] auto without_prefix(std::string_view message) -> std::string;
+
+///
 /// Returns the message of the exception being handled, for quoting inside
-/// another message.
+/// another message: without_prefix() of arude::exception_message().
 /// A message quoted this way usually comes from the configuration support
-/// itself, sometimes by way of reflect-cpp, which puts its own text around it;
-/// either way it carries message_prefix, and the outer message already starts
-/// with it. The prefix is removed wherever a message begins, at the start or
-/// after a ": ", so a report reads as one sentence with one prefix rather than
-/// repeating it at each level. The same text inside a path, a key or a value
-/// is left as it was written.
+/// itself, sometimes by way of reflect-cpp, which puts its own text around it.
 ///
 /// Call it only from inside a catch block, as arude::exception_message().
 ///
 /// \return The message, as arude::exception_message() describes it, without message_prefix.
 ///
 [[nodiscard]] auto nested_message() -> std::string;
+
+///
+/// Rethrows the exception being handled as an exception_t, or throws one
+/// reporting the failure through a fallback code.
+/// An exception_t is rethrown unchanged, code and call site included.
+/// Anything else is turned into an exception_t naming the failure that was
+/// expected and quoting the message of what was thrown in its place.
+///
+/// Call it only from inside a catch block.
+///
+/// \param fallback The code the failure reports, usually io_error.
+/// \param what The failure being attempted, such as "'file' could not be read".
+/// \param loc The call site a failure reports.
+/// \throws exception_t The one being handled, or the one described above.
+///
+[[noreturn]] auto rethrow_as(config_error fallback, std::string_view what, std::source_location loc) -> void;
 
 } // namespace arude::config::detail
