@@ -126,7 +126,7 @@ public: // Accessors
   /// The name prefix is what keeps it distinct from an EEPROM slot whose
   /// address spells the same.
   ///
-  /// \return The location, which is what the manager keys on and what errors quote.
+  /// \return The location, which is what errors quote.
   ///
   [[nodiscard]] auto location() const -> std::string;
 

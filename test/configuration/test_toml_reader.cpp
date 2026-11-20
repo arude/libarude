@@ -34,7 +34,7 @@ namespace
 ///
 /// A colour, which reflect-cpp reads by name.
 ///
-enum class colour // NOLINT(performance-enum-size): reflect-cpp cannot list the names of a narrower enumeration.
+enum class colour // NOLINT(performance-enum-size): reflect-cpp 0.19.0 needs enum_range for a non-int enum.
 {
   ///
   /// Red.
@@ -50,7 +50,7 @@ enum class colour // NOLINT(performance-enum-size): reflect-cpp cannot list the 
 ///
 /// A flag enum, whose value reflect-cpp writes as '|'-separated names.
 ///
-enum class flags // NOLINT(performance-enum-size): reflect-cpp cannot list the names of a narrower enumeration.
+enum class flags // NOLINT(performance-enum-size): kept signed, so a negative flag value stays negative.
 {
   ///
   /// The first flag.
@@ -74,6 +74,23 @@ constexpr auto operator|(flags left, flags right) -> flags
 {
   return static_cast<flags>(std::to_underlying(left) | std::to_underlying(right));
 }
+
+///
+/// A colour on a narrower underlying type, which reflect-cpp reflects once
+/// rfl::config::enum_range names bounds of that type.
+///
+enum class small_colour : std::uint8_t
+{
+  ///
+  /// Red.
+  ///
+  red,
+
+  ///
+  /// Green.
+  ///
+  green
+};
 
 ///
 /// The configuration the reader checks are read into.
@@ -131,6 +148,11 @@ struct checks
   flags mode = flags::a;
 
   ///
+  /// A colour on a narrower underlying type.
+  ///
+  small_colour small_hue = small_colour::red;
+
+  ///
   /// An opaque payload, read from base64 text.
   ///
   arude::config::binary secret;
@@ -181,6 +203,29 @@ template<typename E>
 } // namespace
 
 } // namespace toml_reader_test
+
+namespace rfl::config
+{
+
+///
+/// The range of the narrow colour, in its own underlying type, which is what
+/// reflect-cpp 0.19.0 needs to reflect a non-flag enum that is not int.
+///
+template<>
+struct enum_range<toml_reader_test::small_colour>
+{
+  ///
+  /// The lowest enumerator's value.
+  ///
+  static constexpr auto min = std::uint8_t{0};
+
+  ///
+  /// The highest enumerator's value.
+  ///
+  static constexpr auto max = std::uint8_t{1};
+};
+
+} // namespace rfl::config
 
 SCENARIO("an integer that does not fit the field's type is refused", "[config][toml_reader]")
 {
@@ -535,6 +580,41 @@ SCENARIO("two map keys spelling one integer are refused rather than silently mer
       {
         REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
         REQUIRE(failure.str().contains("the key '7' names the same entry as another key."));
+      }
+    }
+  }
+}
+
+SCENARIO("a non-int enum reads once its range is specialised", "[config][toml_reader]")
+{
+  GIVEN("text whose narrow colour is spelt by name")
+  {
+    constexpr auto text = std::string_view{"version = 1\nsmall_hue = \"green\"\n"};
+
+    WHEN("it is read")
+    {
+      const auto loaded = toml_reader_test::read(text);
+
+      THEN("it reads as that enumerator")
+      {
+        REQUIRE(loaded.small_hue == toml_reader_test::small_colour::green);
+      }
+    }
+  }
+
+  GIVEN("text whose narrow colour is spelt as a number")
+  {
+    constexpr auto text = std::string_view{"version = 1\nsmall_hue = \"300\"\n"};
+
+    WHEN("it is read")
+    {
+      const auto failure = toml_reader_test::failure_of<arude::config::exception_t>(
+        [&text] -> void { std::ignore = toml_reader_test::read(text); });
+
+      THEN("it is refused, as any enum's numeric spelling is")
+      {
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("'300' names no enumerator of "));
       }
     }
   }

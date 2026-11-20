@@ -18,62 +18,46 @@
 /// including the newest version's header wherever the configuration is used
 /// is the application's to do; see arude/config/migration.hpp.
 ///
-/// A configuration is a plain aggregate, reflected by reflect-cpp and stored
-/// as TOML. An application goes through arude::config::config_manager, which
-/// registers documents and hands out section handles:
+/// A configuration is one plain aggregate per file, reflected by reflect-cpp
+/// and stored as TOML. The application holds the newest version of each type
+/// in a config_file over a transport, and injects one member of it into a
+/// subsystem through a handle:
 ///
 /// ```cpp
-/// auto manager = arude::config::config_manager{};
+/// auto file = arude::config::config_file<app_config, arude::config::transport_file>{
+///   arude::config::transport_file{"app.toml"}};
 ///
-/// auto document = manager.register_document(
-///   arude::config::endpoint_toml{}, arude::config::transport_file{"app.toml"});
+/// file.load();                          // One read, one parse, one whole root.
 ///
-/// auto app     = document.add_root<app_config>();
-/// auto network = document.add_section<network_config>("network");
-///
-/// document.load();                       // One read, one parse, all sections filled.
-///
-/// auto server = http_server{network};    // Injected with the section, nothing more.
+/// auto server = http_server{file.member(&app_config::network)}; // Injected with the member, nothing more.
 /// ```
 ///
-/// Under that sits the pair the document is built from, usable directly where
-/// a manager and a cache would be in the way: an endpoint is the format and a
-/// transport is the place, so endpoint_toml{}.parse(transport_file{path}) is
-/// one read of the file and nothing else, giving the endpoint's own tree, or
-/// std::nullopt where there is no file. read_section() and write_section()
-/// take a section out of such a tree and put one back.
-/// arude/config/endpoint_toml.hpp also carries to_toml() and from_toml() for
-/// text that never reaches a transport at all.
+/// A member whose type is wrapped in arude::config::versioned<> carries its
+/// own version, read as whichever version of its previous_t chain the file
+/// declares and migrated to the newest one this build knows. to_toml(),
+/// from_toml() and from_toml_migrated() convert between a configuration and
+/// TOML text with no transport in the way, for text that never touches one.
 ///
-/// An endpoint of an application's own implements tree_reader and
-/// tree_writer, in arude/config/tree_reader.hpp and tree_writer.hpp, over its
-/// own tree, and satisfies endpoint_c; see arude/config/endpoint.hpp.
+/// Enumerations of a configuration are reflected by name only. reflect-cpp
+/// 0.19.0 cannot reflect a non-flag enum whose underlying type is not int
+/// unless rfl::config::enum_range<E> is specialised with bounds of that type;
+/// such an enum does not compile in a configuration without the
+/// specialisation.
 ///
 
 #include "arude/config/base64.hpp"
 #include "arude/config/binary.hpp"
 #include "arude/config/common.hpp"
-#include "arude/config/config_document.hpp"
 #include "arude/config/config_file.hpp"
-#include "arude/config/config_handle.hpp"
-#include "arude/config/config_manager.hpp"
 #include "arude/config/config_member.hpp"
-#include "arude/config/document_base.hpp"
-#include "arude/config/endpoint.hpp"
-#include "arude/config/endpoint_toml.hpp"
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
 #include "arude/config/toml.hpp"
 #include "arude/config/toml_parsers.hpp"
 #include "arude/config/toml_reader.hpp"
-#include "arude/config/toml_tree_reader.hpp"
-#include "arude/config/toml_tree_writer.hpp"
 #include "arude/config/toml_writer.hpp"
 #include "arude/config/transport.hpp"
 #include "arude/config/transport_file.hpp"
-#include "arude/config/tree_reader.hpp"
-#include "arude/config/tree_writer.hpp"
-#include "arude/config/type_registry.hpp"
 #include "arude/config/versioned.hpp"
 
 // Out of the sorted group above because it is conditional. The HTTPS transport

@@ -14,17 +14,20 @@
 
 #include "arude/config.hpp"
 #include "test/configuration/helpers/memory_transport.hpp"
+#include "test/helpers/temp_directory.hpp"
 #include "test/helpers/temp_file.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <format>
 #include <future>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -772,17 +775,20 @@ SCENARIO("a load overlapping a store of the same file reads one whole file", "[c
 {
   GIVEN("a file stored by one config_file, and a second config_file over the same file")
   {
-    const auto file_path = test_helpers::temp_file{"arude_config_file_overlap.toml"};
+    // The file gets its own directory, so the count of its siblings is exact:
+    // a temporary a store leaves beside it would be found.
+    const auto directory = test_helpers::temp_directory{"arude_config_file_overlap"};
+    const auto file_path = directory.path() / "app.toml";
 
     auto writer = arude::config::config_file<config_file_test::app, arude::config::transport_file>{
-      arude::config::transport_file{file_path.path()}};
+      arude::config::transport_file{file_path}};
     auto value = config_file_test::app{};
     value.name = "stored";
     writer.set(value);
     writer.store();
 
     auto reader = arude::config::config_file<config_file_test::app, arude::config::transport_file>{
-      arude::config::transport_file{file_path.path()}};
+      arude::config::transport_file{file_path}};
 
     WHEN("one thread stores it over and over while another loads it with the create policy")
     {
@@ -834,6 +840,16 @@ SCENARIO("a load overlapping a store of the same file reads one whole file", "[c
         REQUIRE(stores_refused < rounds);
         REQUIRE(loads_at_defaults == 0);
         REQUIRE(loads_failed == 0);
+      }
+
+      THEN("no temporary file was left beside it")
+      {
+        const auto siblings = std::ranges::distance(
+          std::filesystem::directory_iterator{directory.path()} |
+          std::views::filter(
+            [&file_path](const std::filesystem::directory_entry& entry) -> bool
+            { return entry.path().filename().string().contains(file_path.filename().string()); }));
+        REQUIRE(siblings == 1);
       }
     }
   }
@@ -1137,6 +1153,87 @@ SCENARIO("an exception_t from the transport passes through unchanged", "[config]
       {
         REQUIRE(failure.data() == arude::config::config_error::invalid_location);
         REQUIRE(failure.str() == "arude::config: the transport refused.");
+      }
+    }
+  }
+}
+
+SCENARIO("reject_unknown_fields refuses what the root does not declare", "[config][config_file]")
+{
+  GIVEN("a file over a strict format, with a cached value, and the three sources that hold an extra key")
+  {
+    auto store = config_test::memory_transport::store_t{};
+
+    auto file = arude::config::config_file<config_file_test::app, config_test::memory_transport>{
+      config_test::memory_transport{"app", store},
+      arude::config::toml_format{.reject_unknown_fields = true}
+    };
+
+    auto lenient = arude::config::config_file<config_file_test::app, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
+
+    auto cached = config_file_test::app{};
+    cached.name = "cached";
+    file.set(cached);
+
+    const auto root_extra = std::format(
+      "version = 1\nname = \"app\"\nstray = 7\n{}\n[extra]\nversion = 1\ndepth = 3\n", config_file_test::network_block);
+    const auto member_extra = std::string{"version = 1\nname = \"app\"\n"
+                                          "[network]\nversion = 2\nhostname = \"source-host\"\nport = 80\nbogus = 1\n"
+                                          "[network.inner]\nversion = 1\ndepth = 7\n"
+                                          "[[network.extras]]\nversion = 1\ndepth = 7\n"
+                                          "[extra]\nversion = 1\ndepth = 3\n"};
+    const auto older_member_extra = std::string{"version = 1\nname = \"app\"\n"
+                                                "[network]\nversion = 1\nhost = \"old-host\"\nbogus = 1\n"
+                                                "[extra]\nversion = 1\ndepth = 3\n"};
+
+    WHEN("each source is loaded through the strict file")
+    {
+      THEN("the root's extra key is an invalid_payload, and the cache is untouched")
+      {
+        store["app"] = arude::config::as_bytes(root_extra);
+
+        const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.load(); });
+
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("not used"));
+        REQUIRE(file.get().name == "cached");
+      }
+
+      THEN("the member's extra key is an invalid_payload, and the cache is untouched")
+      {
+        store["app"] = arude::config::as_bytes(member_extra);
+
+        const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.load(); });
+
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("not used"));
+        REQUIRE(file.get().name == "cached");
+      }
+
+      THEN("an extra key in an older member being migrated is an invalid_payload, and the cache is untouched")
+      {
+        store["app"] = arude::config::as_bytes(older_member_extra);
+
+        const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.load(); });
+
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("not used"));
+        REQUIRE(file.get().name == "cached");
+      }
+    }
+
+    WHEN("each source is loaded through the default format")
+    {
+      THEN("all three are accepted")
+      {
+        for(const auto& text : {root_extra, member_extra, older_member_extra})
+        {
+          store["app"] = arude::config::as_bytes(text);
+          lenient.load();
+          REQUIRE(lenient.get().name == "app");
+        }
       }
     }
   }

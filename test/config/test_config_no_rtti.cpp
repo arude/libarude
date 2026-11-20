@@ -8,11 +8,12 @@
 ///
 
 // Built into the executable without RTTI, beside test_type_key_no_rtti.cpp,
-// against a library that was built with it. The manager's type index is keyed
-// on arude::type_key_t, which is a different type in the two builds, so this
-// pins that a consumer without RTTI can still register a type and look it up.
+// against a library that was built with it. A config_file over the in-memory
+// transport loads, migrates and stores in that build, so the configuration
+// support needs no RTTI of its own either.
 
 #include "arude/config.hpp"
+#include "test/configuration/helpers/memory_transport.hpp"
 #include "test/helpers/config_test_v1.hpp"
 #include "test/helpers/config_test_v2.hpp"
 
@@ -30,95 +31,37 @@
   #error "test_config_no_rtti.cpp must be built without RTTI; CMakeLists.txt passes -fno-rtti or /GR-."
 #endif // #if (defined __cpp_rtti) || (defined __GXX_RTTI) || (defined _CPP_RTTI)
 
-namespace
+SCENARIO("a config_file loads, migrates and stores without RTTI", "[config][config_file][no_rtti]")
 {
-namespace config_no_rtti_test
-{
-
-///
-/// A transport with nothing behind it, so a document can be registered without
-/// touching the filesystem.
-///
-class transport_empty final
-{
-public: // Constants
-  static constexpr auto name = std::string_view{"empty"};
-
-public: // Accessors
-  [[nodiscard]] auto location() const -> std::string;
-  [[nodiscard]] auto writable() const -> bool;
-  [[nodiscard]] auto read() const -> std::optional<std::vector<std::byte>>;
-
-public: // Methods
-  auto write(std::span<const std::byte> bytes) const -> void;
-};
-
-///
-///
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
-auto transport_empty::location() const -> std::string
-{
-  return std::string{name};
-}
-
-///
-///
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
-auto transport_empty::writable() const -> bool
-{
-  return true;
-}
-
-///
-///
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
-auto transport_empty::read() const -> std::optional<std::vector<std::byte>>
-{
-  return std::nullopt;
-}
-
-///
-///
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static): the contract is an instance operation.
-auto transport_empty::write([[maybe_unused]] const std::span<const std::byte> bytes) const -> void
-{
-}
-
-} // namespace config_no_rtti_test
-
-} // namespace
-
-SCENARIO("the type index works without RTTI", "[config][config_manager][no_rtti]")
-{
-  GIVEN("a manager with a root section registered as a type")
+  GIVEN("a file whose source holds version 1, over the in-memory transport")
   {
-    auto manager = arude::config::config_manager{};
-    auto document = manager.register_document(arude::config::endpoint_toml{}, config_no_rtti_test::transport_empty{});
-    auto root = document.add_root<test_helpers::config_test_v1>();
+    auto store = config_test::memory_transport::store_t{};
+    store["app"] = arude::config::as_bytes(
+      std::string{"version = 1\n"
+                  "name = \"without rtti\"\n"
+                  "retries = 7\n"
+                  "secret = \"\"\n"});
 
-    WHEN("the section is set")
+    auto file = arude::config::config_file<test_helpers::config_test_t, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
+
+    WHEN("it is loaded")
     {
-      auto written = test_helpers::config_test_v1{};
-      written.name = "without rtti";
+      file.load();
 
-      root.set(written);
-
-      THEN("get<T>() finds it by its type")
+      THEN("the root is migrated to the current version")
       {
-        REQUIRE(manager.get<test_helpers::config_test_v1>().name == "without rtti");
+        REQUIRE(file.get().version == arude::config::version_of<test_helpers::config_test_t>());
+        REQUIRE(file.get().name == "without rtti");
       }
-    }
 
-    THEN("a type nobody registered is a not_found")
-    {
-      try
+      THEN("a store writes the migrated root back")
       {
-        std::ignore = manager.get<test_helpers::config_test_t>();
-        FAIL("getting an unregistered type should have thrown");
-      }
-      catch(const arude::config::exception_t& ex)
-      {
-        REQUIRE(ex.data() == arude::config::config_error::not_found);
+        file.store();
+
+        REQUIRE(store.contains("app"));
+        REQUIRE(arude::config::as_text(store.at("app")).contains("version = 2"));
       }
     }
   }

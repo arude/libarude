@@ -452,6 +452,82 @@ namespace module_test
 {
 
 ///
+/// Version 1 of a small sub-configuration a member of the consumer's root
+/// carries in a versioned<> wrapper.
+///
+struct net_v1
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// The host, as version 1 names it.
+  ///
+  std::string host = "v1-host";
+};
+
+///
+/// Version 2 of the same sub-configuration.
+///
+struct net_v2
+{
+  ///
+  /// The version before this one.
+  ///
+  using previous_t = net_v1;
+
+  ///
+  /// \see net_v1::config_version
+  ///
+  static constexpr auto config_version = arude::config::version_t{2};
+
+  ///
+  /// \see net_v1::version
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// The host, as version 2 names it.
+  ///
+  std::string hostname = "v2-host";
+};
+
+///
+/// Upgrades a network from version 1 to version 2.
+/// \param val The version 1 network. Not retained.
+/// \return The same network as version 2.
+///
+[[nodiscard]] constexpr auto upgrade(const net_v1& val) -> net_v2;
+
+///
+/// Downgrades a network from version 2 to version 1.
+/// \param val The version 2 network. Not retained.
+/// \return The same network as version 1.
+///
+[[nodiscard]] constexpr auto downgrade(const net_v2& val) -> net_v1;
+
+///
+///
+constexpr auto upgrade(const net_v1& val) -> net_v2
+{
+  return net_v2{.hostname = val.host};
+}
+
+///
+///
+constexpr auto downgrade(const net_v2& val) -> net_v1
+{
+  return net_v1{.host = val.hostname};
+}
+
+///
 /// A module consumer's own configuration, version 1.
 /// Declared here rather than taken from the library, because the library ships
 /// no configuration type: what has to work is the versioning machinery applied
@@ -478,6 +554,11 @@ struct app_config_v1
   /// Opaque payload, written as base64 text.
   ///
   arude::config::binary secret;
+
+  ///
+  /// The network member, carrying its own version.
+  ///
+  arude::config::versioned<net_v2> network;
 };
 
 ///
@@ -514,6 +595,11 @@ struct app_config_v2
   /// \see app_config_v1::secret
   ///
   arude::config::binary secret;
+
+  ///
+  /// \see app_config_v1::network
+  ///
+  arude::config::versioned<net_v2> network;
 };
 
 ///
@@ -543,14 +629,14 @@ using app_config_t = app_config_v2;
 ///
 constexpr auto upgrade(const app_config_v1& val) -> app_config_v2
 {
-  return app_config_v2{.name = val.name, .secret = val.secret};
+  return app_config_v2{.name = val.name, .secret = val.secret, .network = val.network};
 }
 
 ///
 ///
 constexpr auto downgrade(const app_config_v2& val) -> app_config_v1
 {
-  return app_config_v1{.name = val.name, .secret = val.secret};
+  return app_config_v1{.name = val.name, .secret = val.secret, .network = val.network};
 }
 
 } // namespace module_test
@@ -562,10 +648,20 @@ SCENARIO("the module exports the configuration interface", "[module][config]")
     THEN("the concepts and the version arithmetic came across")
     {
       STATIC_REQUIRE(arude::config::configuration_c<module_test::app_config_t>);
-      STATIC_REQUIRE(arude::config::endpoint_c<arude::config::endpoint_toml, arude::config::transport_file>);
-      STATIC_REQUIRE(arude::config::tree_endpoint_c<arude::config::endpoint_toml>);
+      STATIC_REQUIRE(arude::config::transport_c<arude::config::transport_file>);
+      STATIC_REQUIRE(
+        std::is_same_v<arude::config::versioned<module_test::app_config_t>::value_t, module_test::app_config_t>);
       STATIC_REQUIRE(std::is_same_v<module_test::app_config_t, module_test::app_config_v2>);
       STATIC_REQUIRE(arude::config::version_of<module_test::app_config_v2>() == 2);
+    }
+
+    THEN("a config_file over the file transport is what a consumer builds on")
+    {
+      using file_t = arude::config::config_file<module_test::app_config_t, arude::config::transport_file>;
+
+      STATIC_REQUIRE(std::is_same_v<file_t::value_t, module_test::app_config_t>);
+      STATIC_REQUIRE(std::is_same_v<file_t::transport_t, arude::config::transport_file>);
+      STATIC_REQUIRE(std::is_same_v<file_t::format_t, arude::config::toml_format>);
     }
 
     THEN("base64 came across and is still constexpr")
@@ -580,41 +676,31 @@ SCENARIO("the module exports the configuration interface", "[module][config]")
   }
 }
 
-// An endpoint of a module consumer's own is written against these names, so
-// every one of them has to come across, and the TOML endpoint's tree with them.
-SCENARIO("a module consumer reads a section through the tree interface", "[module][config]")
+// A module consumer's own versioned configuration is read through the same
+// machinery a header consumer's is: the text declares the version it was
+// written by, and from_toml_migrated brings the root and every versioned
+// member of it to the version this build has.
+SCENARIO("a module consumer reads a versioned member", "[module][config]")
 {
-  GIVEN("the TOML endpoint and a tree of its own type")
+  GIVEN("text written by version 1 of the consumer's configuration, whose member is also one version behind")
   {
-    const auto format = arude::config::endpoint_toml{};
-    auto document = arude::config::endpoint_toml::document_t{};
+    static constexpr auto text = std::string_view{"version = 1\n"
+                                                  "name = \"old\"\n"
+                                                  "secret = \"\"\n"
+                                                  "[network]\n"
+                                                  "version = 1\n"
+                                                  "host = \"old-host\"\n"};
 
-    WHEN("a section is written into the tree and a reader is made over it")
+    WHEN("it is read as the current version, migrating")
     {
-      arude::config::write_section(format, document, "app", module_test::app_config_t{.name = "through the tree"});
+      const auto read = arude::config::from_toml_migrated<module_test::app_config_t>(text);
 
-      const arude::config::toml_tree_reader tree = format.make_reader(document);
-
-      THEN("the reader is a tree_reader whose root is a table, with the endpoint's options")
+      THEN("what version 1 carried came forward, the member's rename included")
       {
-        STATIC_REQUIRE(std::is_abstract_v<arude::config::tree_reader>);
-        STATIC_REQUIRE(std::is_abstract_v<arude::config::tree_writer>);
-        STATIC_REQUIRE(std::is_base_of_v<arude::config::tree_writer, arude::config::toml_tree_writer>);
-        STATIC_REQUIRE(std::is_same_v<decltype(tree.root()), arude::config::tree_node>);
-        STATIC_REQUIRE(std::is_same_v<decltype(tree.options()), arude::config::tree_read_options>);
-        STATIC_REQUIRE(sizeof(arude::config::tree_branch) == sizeof(void*));
-        STATIC_REQUIRE(std::is_same_v<std::variant_alternative_t<0, arude::config::tree_scalar_t>, bool>);
-
-        REQUIRE(tree.kind(tree.root()) == arude::config::node_kind::table);
-        REQUIRE(!tree.options().reject_unknown_fields);
-      }
-
-      THEN("the section reads back")
-      {
-        const auto read = arude::config::read_section<module_test::app_config_t>(
-          format, document, "app", arude::config::load_policy::none);
-
-        REQUIRE(read.name == "through the tree");
+        REQUIRE(read.name == "old");
+        REQUIRE(read.version == arude::config::version_of<module_test::app_config_t>());
+        REQUIRE(read.network.value().hostname == "old-host");
+        REQUIRE(read.network.value().version == arude::config::version_of<module_test::net_v2>());
       }
     }
   }
@@ -639,7 +725,7 @@ SCENARIO("the module carries the configuration specializations", "[module][confi
     }
   }
 
-  GIVEN("a manager error")
+  GIVEN("a configuration error")
   {
     THEN("it formats as its name, which is what the formatter anchor is for")
     {

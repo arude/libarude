@@ -35,7 +35,7 @@ namespace
 ///
 /// A colour, which reflect-cpp writes by name.
 ///
-enum class colour // NOLINT(performance-enum-size): reflect-cpp cannot list the names of a narrower enumeration.
+enum class colour // NOLINT(performance-enum-size): reflect-cpp 0.19.0 needs enum_range for a non-int enum.
 {
   ///
   /// Red.
@@ -51,7 +51,7 @@ enum class colour // NOLINT(performance-enum-size): reflect-cpp cannot list the 
 ///
 /// A flag enum, whose value reflect-cpp writes as '|'-separated names.
 ///
-enum class flags // NOLINT(performance-enum-size): reflect-cpp cannot list the names of a narrower enumeration.
+enum class flags // NOLINT(performance-enum-size): kept signed, so a negative flag value stays negative.
 {
   ///
   /// The first flag.

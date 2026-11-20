@@ -13,6 +13,7 @@
 
 #include "arude/config.hpp"
 #include "arude/exception.hpp"
+#include "test/configuration/helpers/memory_transport.hpp"
 #include "test/helpers/config_test_v2.hpp"
 #include "test/helpers/temp_file.hpp"
 #include "test/helpers/write_text.hpp"
@@ -28,11 +29,9 @@
 #include <tuple>
 
 // A defaulted trailing std::source_location leaves the nullary forms the
-// concepts ask for callable, so arude's own transport and endpoint still
-// satisfy them.
+// concepts ask for callable, so arude's own transports still satisfy them.
 static_assert(arude::config::transport_c<arude::config::transport_file>);
 static_assert(arude::config::path_transport_c<arude::config::transport_file>);
-static_assert(arude::config::endpoint_c<arude::config::endpoint_toml, arude::config::transport_file>);
 
 namespace
 {
@@ -135,26 +134,24 @@ auto failure_of(const std::invocable auto& call) -> E
 
 } // namespace
 
-SCENARIO("a section missing from the source is reported where load() was called", "[config][call_site]")
+SCENARIO("a source that is not there is reported where load() was called", "[config][call_site]")
 {
-  GIVEN("a document whose source has no section of the name added")
+  GIVEN("a file whose source is not there")
   {
-    const auto file = test_helpers::temp_file{"arude_call_site_missing_section.toml"};
-    test_helpers::write_text(file.path(), "version = 2\n");
+    auto store = config_test::memory_transport::store_t{};
 
-    auto manager = arude::config::config_manager{};
-    auto document =
-      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
-    auto network = document.add_section<test_helpers::config_test_t>("network");
+    auto file = arude::config::config_file<test_helpers::config_test_t, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
 
-    WHEN("the document is loaded through the section's handle without creating it")
+    WHEN("the file is loaded without creating it")
     {
       auto call = std::source_location{};
       const auto failure = call_site_test::failure_of<arude::config::exception_t>(
-        [&call, &network] -> void
+        [&call, &file] -> void
         {
           call = std::source_location::current();
-          network.load(arude::config::load_policy::none);
+          file.load(arude::config::load_policy::none);
         });
 
       THEN("it is a not_found raised at that call, which reads as one failure")
@@ -162,23 +159,6 @@ SCENARIO("a section missing from the source is reported where load() was called"
         REQUIRE(failure.data() == arude::config::config_error::not_found);
         REQUIRE(call_site_test::raised_at(failure, call));
         REQUIRE(call_site_test::reads_as_one_failure(failure));
-      }
-    }
-
-    WHEN("its value is asked for before any load")
-    {
-      auto call = std::source_location{};
-      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
-        [&call, &network] -> void
-        {
-          call = std::source_location::current();
-          std::ignore = network.get();
-        });
-
-      THEN("it is a not_found raised at the get()")
-      {
-        REQUIRE(failure.data() == arude::config::config_error::not_found);
-        REQUIRE(call_site_test::raised_at(failure, call));
       }
     }
   }
@@ -252,50 +232,24 @@ SCENARIO("text that is not TOML is reported where it was parsed", "[config][call
   }
 }
 
-SCENARIO("a binary field that is not base64 is reported where it was read", "[config][call_site]")
+SCENARIO("a binary field that is not base64 is reported where the file was loaded", "[config][call_site]")
 {
-  GIVEN("TOML text whose binary field is not base64")
-  {
-    constexpr auto text = std::string_view{"version = 2\nsecret = \"!!!!\"\n"};
-
-    WHEN("it is parsed as a configuration")
-    {
-      auto call = std::source_location{};
-      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
-        [&call, &text] -> void
-        {
-          call = std::source_location::current();
-          std::ignore = arude::config::from_toml<test_helpers::config_test_t>(text);
-        });
-
-      THEN("it is an invalid_payload raised at the call, naming the base64 failure as text")
-      {
-        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
-        REQUIRE(failure.str().contains("is not a base64 character"));
-        REQUIRE(call_site_test::raised_at(failure, call));
-        REQUIRE(call_site_test::reads_as_one_failure(failure));
-      }
-    }
-  }
-
-  GIVEN("a document whose source holds such a field")
+  GIVEN("a file whose source holds a payload that is not base64")
   {
     const auto file = test_helpers::temp_file{"arude_call_site_base64.toml"};
     test_helpers::write_text(file.path(), "version = 2\nsecret = \"!!!!\"\n");
 
-    auto manager = arude::config::config_manager{};
-    auto document =
-      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
-    std::ignore = document.add_root<test_helpers::config_test_t>();
+    auto config = arude::config::config_file<test_helpers::config_test_t, arude::config::transport_file>{
+      arude::config::transport_file{file.path()}};
 
-    WHEN("the document is loaded")
+    WHEN("the file is loaded")
     {
       auto call = std::source_location{};
       const auto failure = call_site_test::failure_of<arude::config::exception_t>(
-        [&call, &document] -> void
+        [&call, &config] -> void
         {
           call = std::source_location::current();
-          document.load();
+          config.load();
         });
 
       THEN("it is an invalid_payload raised at the load()")
@@ -347,25 +301,23 @@ SCENARIO("a binary field that is not base64 is reported where it was read", "[co
 
 SCENARIO("a write the transport cannot make is reported where store() was called", "[config][call_site]")
 {
-  GIVEN("a document whose file would have to sit beneath a regular file")
+  GIVEN("a file whose target would have to sit beneath a regular file")
   {
     const auto blocker = test_helpers::temp_file{"arude_call_site_blocker"};
     test_helpers::write_text(blocker.path(), "not a directory\n");
 
-    auto manager = arude::config::config_manager{};
-    auto document = manager.register_document(
-      arude::config::endpoint_toml{}, arude::config::transport_file{blocker.path() / "app.toml"});
-    auto root = document.add_root<test_helpers::config_test_t>();
-    root.set(test_helpers::config_test_t{});
+    auto file = arude::config::config_file<test_helpers::config_test_t, arude::config::transport_file>{
+      arude::config::transport_file{blocker.path() / "app.toml"}};
+    file.set(test_helpers::config_test_t{});
 
     WHEN("it is stored")
     {
       auto call = std::source_location{};
       const auto failure = call_site_test::failure_of<arude::config::exception_t>(
-        [&call, &document] -> void
+        [&call, &file] -> void
         {
           call = std::source_location::current();
-          document.store();
+          file.store();
         });
 
       THEN("it is an io_error raised at the store(), quoting the filesystem error as text")
@@ -379,64 +331,73 @@ SCENARIO("a write the transport cannot make is reported where store() was called
   }
 }
 
-SCENARIO("the manager reports a failure where it was asked", "[config][call_site]")
+SCENARIO("a member handle on an unloaded root reports at the handle's call site", "[config][call_site]")
 {
-  GIVEN("a manager with a document registered")
+  GIVEN("a file with nothing loaded or set, and a handle made from it")
   {
-    const auto file = test_helpers::temp_file{"arude_call_site_manager.toml"};
+    auto store = config_test::memory_transport::store_t{};
 
-    auto manager = arude::config::config_manager{};
-    std::ignore = manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+    auto file = arude::config::config_file<test_helpers::config_test_t, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
+    auto handle = file.member(&test_helpers::config_test_t::name);
 
-    WHEN("a type registered nowhere is asked for")
+    WHEN("the member is asked for")
     {
       auto call = std::source_location{};
       const auto failure = call_site_test::failure_of<arude::config::exception_t>(
-        [&call, &manager] -> void
+        [&call, &handle] -> void
         {
           call = std::source_location::current();
-          std::ignore = manager.get<test_helpers::config_test_t>();
+          std::ignore = handle.get();
         });
 
-      THEN("it is a not_found raised at the get()")
+      THEN("it is a not_found raised at the handle's get()")
       {
         REQUIRE(failure.data() == arude::config::config_error::not_found);
         REQUIRE(call_site_test::raised_at(failure, call));
+        REQUIRE(call_site_test::reads_as_one_failure(failure));
       }
     }
+  }
+}
 
-    WHEN("the same location is registered again")
+SCENARIO("a store refused by the probe is reported where store() was called", "[config][call_site]")
+{
+  GIVEN("a loaded file whose source is then replaced by a newer version")
+  {
+    auto store = config_test::memory_transport::store_t{};
+    store["app"] = arude::config::as_bytes(
+      std::string{"version = 2\n"
+                  "name = \"current\"\n"
+                  "retries = 3\n"
+                  "endpoint = \"localhost\"\n"
+                  "secret = \"\"\n"});
+
+    auto file = arude::config::config_file<test_helpers::config_test_t, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
+    file.load();
+
+    store["app"] = arude::config::as_bytes(std::string{"version = 99\n"});
+
+    WHEN("it is stored")
     {
       auto call = std::source_location{};
       const auto failure = call_site_test::failure_of<arude::config::exception_t>(
-        [&call, &manager, &file] -> void
+        [&call, &file] -> void
         {
           call = std::source_location::current();
-          std::ignore =
-            manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
+          file.store();
         });
 
-      THEN("it is an already_registered_location raised at the call")
+      THEN("it is an invalid_version raised at the store(), naming the version found")
       {
-        REQUIRE(failure.data() == arude::config::config_error::already_registered_location);
-        REQUIRE(std::string_view{failure.where().file_name()} == std::string_view{call.file_name()});
-      }
-    }
-
-    WHEN("every document is loaded, and the file is not there")
-    {
-      auto call = std::source_location{};
-      const auto failure = call_site_test::failure_of<arude::config::exception_t>(
-        [&call, &manager] -> void
-        {
-          call = std::source_location::current();
-          manager.load_all(arude::config::load_policy::none);
-        });
-
-      THEN("it is a not_found raised at the load_all()")
-      {
-        REQUIRE(failure.data() == arude::config::config_error::not_found);
+        REQUIRE(failure.data() == arude::config::config_error::invalid_version);
+        REQUIRE(failure.str().contains("refusing to store over what this build cannot read"));
+        REQUIRE(failure.str().contains("version 99"));
         REQUIRE(call_site_test::raised_at(failure, call));
+        REQUIRE(call_site_test::reads_as_one_failure(failure));
       }
     }
   }

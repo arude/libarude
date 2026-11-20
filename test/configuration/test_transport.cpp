@@ -6,6 +6,10 @@
 /// libarude is dual licensed. See LICENSE for the AGPLv3 terms, and
 /// LICENSING.md for the alternative MIT license available by arrangement.
 ///
+/// config_file over a transport of an application's own: the contract is a
+/// concept, so anything that satisfies transport_c works, no filesystem or
+/// network required.
+///
 
 #include "arude/config.hpp"
 #include "arude/non_owning_t.hpp"
@@ -20,7 +24,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <vector>
 
 namespace transport_test
@@ -197,23 +200,22 @@ auto transport_failing::write([[maybe_unused]] const std::span<const std::byte> 
 static_assert(arude::config::transport_c<transport_test::transport_memory>);
 static_assert(arude::config::transport_c<transport_test::transport_failing>);
 
-SCENARIO("a document round-trips through a transport of an application's own", "[config][transport]")
+SCENARIO("a file round-trips through a transport of an application's own", "[config][transport]")
 {
-  GIVEN("a manager, a memory transport and a document over it")
+  GIVEN("a memory transport and a file over it")
   {
     auto store = transport_test::transport_memory::store_t{};
-    auto manager = arude::config::config_manager{};
-    auto document = manager.register_document(
-      arude::config::endpoint_toml{}, transport_test::transport_memory{"device", store, true});
-    auto root = document.add_root<test_helpers::config_test_t>();
+    auto file = arude::config::config_file<test_helpers::config_test_t, transport_test::transport_memory>{
+      transport_test::transport_memory{"device", store, true}
+    };
 
     WHEN("a configuration is stored through it")
     {
       auto written = test_helpers::config_test_t{};
       written.name = "device";
 
-      root.set(written);
-      document.store();
+      file.set(written);
+      file.store();
 
       THEN("the bytes went to the store rather than to a file")
       {
@@ -223,28 +225,27 @@ SCENARIO("a document round-trips through a transport of an application's own", "
 
       THEN("it reads back through the same transport")
       {
-        document.load();
-        REQUIRE(root.get().name == "device");
+        file.load();
+        REQUIRE(file.get().name == "device");
       }
     }
   }
 }
 
-SCENARIO("a document at a location with nothing behind it is a not_found", "[config][transport]")
+SCENARIO("a file at a location with nothing behind it is a not_found", "[config][transport]")
 {
-  GIVEN("a document over a memory transport with nothing stored")
+  GIVEN("a file over a memory transport with nothing stored")
   {
     auto store = transport_test::transport_memory::store_t{};
-    auto manager = arude::config::config_manager{};
-    auto document = manager.register_document(
-      arude::config::endpoint_toml{}, transport_test::transport_memory{"absent", store, true});
-    std::ignore = document.add_root<test_helpers::config_test_t>();
+    auto file = arude::config::config_file<test_helpers::config_test_t, transport_test::transport_memory>{
+      transport_test::transport_memory{"absent", store, true}
+    };
 
     THEN("loading it is a not_found")
     {
       try
       {
-        document.load();
+        file.load();
         FAIL("loading an absent slot should have thrown");
       }
       catch(const arude::config::exception_t& ex)
@@ -260,17 +261,16 @@ SCENARIO("a document at a location with nothing behind it is a not_found", "[con
 // the next store would write them over a source that was there all along.
 SCENARIO("a transport whose read fails is not a missing source", "[config][transport]")
 {
-  GIVEN("a document over a transport whose read throws")
+  GIVEN("a file over a transport whose read throws")
   {
-    auto manager = arude::config::config_manager{};
-    auto document = manager.register_document(arude::config::endpoint_toml{}, transport_test::transport_failing{});
-    auto root = document.add_root<test_helpers::config_test_t>();
+    auto file = arude::config::config_file<test_helpers::config_test_t, transport_test::transport_failing>{
+      transport_test::transport_failing{}};
 
     THEN("a load with the create policy is the transport's io_error, and creates nothing")
     {
       try
       {
-        document.load(arude::config::load_policy::create);
+        file.load(arude::config::load_policy::create);
         FAIL("a load whose read fails should have thrown");
       }
       catch(const arude::config::exception_t& ex)
@@ -279,42 +279,40 @@ SCENARIO("a transport whose read fails is not a missing source", "[config][trans
         REQUIRE(ex.str().contains("did not answer"));
       }
 
-      REQUIRE(!root.loaded());
+      REQUIRE(!file.loaded());
     }
   }
 }
 
 SCENARIO("a read-only transport refuses to be written", "[config][transport]")
 {
-  GIVEN("a document over a read-only store already holding a configuration")
+  GIVEN("a file over a read-only store already holding a configuration")
   {
     auto store = transport_test::transport_memory::store_t{};
 
-    // Seeded through a writable document, so the read-only one has something
-    // to read: what is being tested is the writing, not the reading.
-    auto writer = arude::config::config_manager{};
-    auto writer_document =
-      writer.register_document(arude::config::endpoint_toml{}, transport_test::transport_memory{"device", store, true});
-    auto writer_root = writer_document.add_root<test_helpers::config_test_t>();
-    writer_root.set(test_helpers::config_test_t{});
-    writer_document.store();
+    // Seeded through a writable file, so the read-only one has something to
+    // read: what is being tested is the writing, not the reading.
+    auto writer = arude::config::config_file<test_helpers::config_test_t, transport_test::transport_memory>{
+      transport_test::transport_memory{"device", store, true}
+    };
+    writer.set(test_helpers::config_test_t{});
+    writer.store();
 
-    auto manager = arude::config::config_manager{};
-    auto document = manager.register_document(
-      arude::config::endpoint_toml{}, transport_test::transport_memory{"device", store, false});
-    auto root = document.add_root<test_helpers::config_test_t>();
+    auto file = arude::config::config_file<test_helpers::config_test_t, transport_test::transport_memory>{
+      transport_test::transport_memory{"device", store, false}
+    };
 
     THEN("reading works")
     {
-      document.load();
-      REQUIRE(root.get().version == arude::config::version_of<test_helpers::config_test_t>());
+      file.load();
+      REQUIRE(file.get().version == arude::config::version_of<test_helpers::config_test_t>());
     }
 
     THEN("storing is a read_only, and nothing was serialized to get there")
     {
       try
       {
-        document.store();
+        file.store();
         FAIL("storing through a read-only transport should have thrown");
       }
       catch(const arude::config::exception_t& ex)
@@ -328,22 +326,21 @@ SCENARIO("a read-only transport refuses to be written", "[config][transport]")
     // It is store() that refuses, which is where the write actually is.
     THEN("the create policy fills the cache without touching the transport")
     {
-      auto absent_manager = arude::config::config_manager{};
-      auto absent_document = absent_manager.register_document(
-        arude::config::endpoint_toml{}, transport_test::transport_memory{"absent", store, false});
-      auto absent_root = absent_document.add_root<test_helpers::config_test_t>();
+      auto absent = arude::config::config_file<test_helpers::config_test_t, transport_test::transport_memory>{
+        transport_test::transport_memory{"absent", store, false}
+      };
 
       constexpr auto policy = arude::config::load_policy::create;
 
-      absent_document.load(policy);
+      absent.load(policy);
 
-      REQUIRE(absent_root.loaded());
-      REQUIRE(absent_root.get().version == arude::config::version_of<test_helpers::config_test_t>());
+      REQUIRE(absent.loaded());
+      REQUIRE(absent.get().version == arude::config::version_of<test_helpers::config_test_t>());
       REQUIRE(!store.contains("absent"));
 
       try
       {
-        absent_document.store();
+        absent.store();
         FAIL("storing through a read-only transport should have thrown");
       }
       catch(const arude::config::exception_t& ex)

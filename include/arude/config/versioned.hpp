@@ -549,7 +549,7 @@ auto read_versioned(const toml_reader& reader, toml::node* const node) -> rfl::R
     }
     else
     {
-      return rfl::error(std::format("{} declares no configuration version.", type_name<T>()));
+      return rfl::error("the table declares no configuration version.");
     }
   }
 

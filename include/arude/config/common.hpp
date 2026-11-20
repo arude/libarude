@@ -21,8 +21,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <flat_set>
-#include <functional>
 #include <source_location>
 #include <span>
 #include <string>
@@ -38,9 +36,10 @@ namespace arude::config
 /// not_found, report io_error to the user, and refuse to start on
 /// invalid_payload, which one message string would not let it do.
 ///
-/// Thrown by the transports and the endpoints as well as by the documents and
-/// the manager, so a failure keeps the same name whether it came from a
-/// socket, a file or the cache, and nothing in between has to translate it.
+/// Thrown by the transports, the reading and writing of a configuration, and
+/// the config_file that ties the two to a medium, so a failure keeps the same
+/// name whether it came from a socket, a file or the cache, and nothing in
+/// between has to translate it.
 ///
 /// Formats as its own name, through arude/enum.hpp, so an exception report
 /// names the error rather than calling the payload unformattable.
@@ -52,26 +51,6 @@ enum class config_error : std::uint8_t
   /// constructed with.
   ///
   invalid_location,
-
-  ///
-  /// A document is already registered at that location.
-  /// Told apart from invalid_location because there is nothing wrong with the
-  /// location itself: it is the second registration that is the mistake, and a
-  /// caller wiring documents up at start-up can say so rather than reporting
-  /// that a path it just built is malformed.
-  ///
-  already_registered_location,
-
-  ///
-  /// A section cannot be added to a document, as its name is taken there.
-  /// Either a section of that name is attached already, which for an empty
-  /// name means a second root, or the name and the root section's own keys
-  /// collide at the top level of the document. Told apart from
-  /// already_registered_location because the document and its location are
-  /// fine: what is taken is a name within that one document, so the call to
-  /// fix is the add_section() or add_root(), not the register_document().
-  ///
-  already_registered_section,
 
   ///
   /// The source holds a version that cannot be brought to the one asked for.
@@ -90,20 +69,14 @@ enum class config_error : std::uint8_t
   io_error,
 
   ///
-  /// There is nothing at the location, a section is not in the source or has
-  /// nothing cached, or a type is registered nowhere.
+  /// There is nothing at the location, or a file has nothing loaded or set.
   ///
   not_found,
 
   ///
   /// The transport the location names can be read but not written.
   ///
-  read_only,
-
-  ///
-  /// get<T>() or find<T>() was asked for a type registered in more than one place.
-  ///
-  ambiguous_type
+  read_only
 };
 
 ///
@@ -200,13 +173,6 @@ namespace arude::config
 
 namespace arude::config::detail
 {
-
-///
-/// A set of keys of one table of a document.
-/// The comparison is transparent, so a key arriving as a std::string_view is
-/// looked up without being copied into a string first.
-///
-using key_set_t = std::flat_set<std::string, std::less<>>;
 
 ///
 /// The prefix every message of the configuration support starts with.

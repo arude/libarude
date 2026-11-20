@@ -321,7 +321,7 @@ struct transport_https_options
   ///
   /// What a write announces the body as.
   /// A transport does not know what format it is carrying, so this is a
-  /// setting rather than something derived from the endpoint.
+  /// setting rather than something it could derive.
   ///
   std::string content_type = "text/plain; charset=utf-8";
 
@@ -366,7 +366,7 @@ public: // Accessors
 
   ///
   /// Returns the URL this transport was constructed with.
-  /// \return The URL, exactly as given, which is what the manager keys on and what errors quote.
+  /// \return The URL, exactly as given, which is what errors quote.
   ///
   [[nodiscard]] auto location() const -> std::string;
 

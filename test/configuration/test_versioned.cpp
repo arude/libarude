@@ -481,7 +481,7 @@ SCENARIO("the root itself is versioned like a member", "[config][versioned]")
       THEN("it is an invalid_payload saying the root declares none")
       {
         REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
-        REQUIRE(failure.str().contains("app declares no configuration version."));
+        REQUIRE(failure.str().contains("declares no configuration version."));
       }
     }
 

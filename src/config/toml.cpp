@@ -8,6 +8,7 @@
 ///
 
 #include "arude/config/toml.hpp"
+#include "arude/config/toml_reader.hpp"
 
 #include <toml++/toml.hpp>
 
@@ -87,3 +88,50 @@ auto raise_write_failure(const std::string_view type, const std::string_view mes
 }
 
 } // namespace arude::config::detail
+
+namespace arude::config
+{
+
+///
+///
+auto toml_version(const std::string_view text, const std::source_location loc) -> version_t
+{
+  const auto document = detail::parse_toml(text, detail::text_source, loc);
+  const auto* const version_node = document.get("version");
+
+  auto reason = std::string{};
+
+  if(version_node == nullptr)
+  {
+    reason = "the version key is absent.";
+  }
+  else
+  {
+    const auto integer = detail::integer_of(*version_node);
+
+    if(!integer.has_value())
+    {
+      reason = integer.error();
+    }
+    else
+    {
+      const auto version = detail::narrowed<version_t>(*integer);
+
+      if(!version.has_value())
+      {
+        reason = version.error();
+      }
+      else
+      {
+        return *version;
+      }
+    }
+  }
+
+  throw exception_t{
+    std::format("arude::config: '{}' declares no configuration version: {}", detail::text_source, reason),
+    config_error::invalid_payload,
+    loc};
+}
+
+} // namespace arude::config

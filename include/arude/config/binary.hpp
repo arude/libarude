@@ -229,9 +229,9 @@ struct Reflector<arude::config::binary>
   /// Throws a std::exception and never an arude one: reflect-cpp calls this
   /// from a noexcept parser that turns a std::exception into a parse error and
   /// lets anything else through to std::terminate. The parse error carries the
-  /// message, and the document or text function that started the read throws
-  /// an exception_t naming its own caller in its place, which is why there is
-  /// no call site to take here.
+  /// message, and the config_file or text function that started the read
+  /// throws an exception_t naming its own caller in its place, which is why
+  /// there is no call site to take here.
   ///
   /// \param val Base64 text.
   /// \return The decoded payload.

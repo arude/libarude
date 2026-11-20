@@ -62,6 +62,11 @@ namespace arude::config::detail
 {
 
 ///
+/// What an error message calls text that did not come from a transport.
+///
+inline constexpr auto text_source = std::string_view{"<text>"};
+
+///
 /// Parses TOML text into a table.
 ///
 /// \param text TOML text. Not retained.
@@ -252,3 +257,98 @@ auto write_root(const T& value, const std::source_location loc) -> toml::table
 }
 
 } // namespace arude::config::detail
+
+namespace arude::config
+{
+
+///
+/// Renders a configuration as TOML text.
+/// The text-level counterpart to config_file::store(), for a configuration
+/// that has to become a string rather than reach a transport. The version
+/// written is the one the type declares, whatever the value's version member
+/// happens to hold, so text cannot come out claiming to be a version it is not.
+///
+/// \tparam T Configuration type.
+/// \param val Configuration to render. Not retained.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
+/// \return The TOML text.
+/// \throws exception_t With invalid_payload if the value cannot be written
+///         as TOML.
+///
+template<configuration_c T>
+[[nodiscard]] auto to_toml(const T& val, std::source_location loc = std::source_location::current()) -> std::string;
+
+///
+/// Parses TOML text as a configuration of exactly T's version.
+/// Exact versions throughout, root and members alike.
+///
+/// \tparam T Configuration type.
+/// \param text TOML text. Not retained.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
+/// \return The parsed configuration.
+/// \throws exception_t With invalid_payload if the text does not parse, or
+///         invalid_version if it declares a version other than T's.
+///
+template<configuration_c T>
+[[nodiscard]] auto from_toml(std::string_view text, std::source_location loc = std::source_location::current()) -> T;
+
+///
+/// Parses TOML text as any version To knows, and migrates it to To.
+/// Text newer than this build is refused rather than guessed at.
+///
+/// \tparam To Configuration version to end up at, usually the current one.
+/// \param text TOML text. Not retained.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
+/// \return The configuration, migrated to To.
+/// \throws exception_t With invalid_payload if the text does not parse, or
+///         invalid_version if it declares a version this build has no type for.
+///
+template<configuration_c To>
+[[nodiscard]] auto from_toml_migrated(std::string_view text, std::source_location loc = std::source_location::current())
+  -> To;
+
+///
+/// Returns the configuration version TOML text declares.
+/// Reads the version key alone, so it answers for text of any version,
+/// including one this build has no type for.
+///
+/// \param text TOML text. Not retained.
+/// \param loc Where the call was made, which is what a failure reports. Left to its default.
+/// \return The version the text declares.
+/// \throws exception_t With invalid_payload if the text does not parse, or
+///         carries no readable version.
+///
+[[nodiscard]] auto toml_version(std::string_view text, std::source_location loc = std::source_location::current())
+  -> version_t;
+
+///
+///
+template<configuration_c T>
+auto to_toml(const T& val, const std::source_location loc) -> std::string
+{
+  return detail::render_toml(detail::write_root(val, loc));
+}
+
+///
+///
+template<configuration_c T>
+auto from_toml(const std::string_view text, const std::source_location loc) -> T
+{
+  // load_policy::none, so a version other than T's is refused rather than
+  // migrated: from_toml_migrated is what accepts an older one.
+  auto document = detail::parse_toml(text, detail::text_source, loc);
+
+  return detail::read_root<T>(document, load_policy::none, toml_format{}, detail::text_source, loc);
+}
+
+///
+///
+template<configuration_c To>
+auto from_toml_migrated(const std::string_view text, const std::source_location loc) -> To
+{
+  auto document = detail::parse_toml(text, detail::text_source, loc);
+
+  return detail::read_root<To>(document, load_policy::upgrade_to_current, toml_format{}, detail::text_source, loc);
+}
+
+} // namespace arude::config

@@ -273,21 +273,19 @@ SCENARIO("a binary field in a table that is not base64 fails the load as invalid
     }
   }
 
-  GIVEN("a document whose section's table holds a payload that is not base64")
+  GIVEN("a file whose source holds a payload that is not base64")
   {
-    const auto file = test_helpers::temp_file{"arude_binary_bad_section.toml"};
-    test_helpers::write_text(file.path(), "[vault]\nversion = 1\n[vault.credentials]\nsecret = \"!!!!\"\n");
+    const auto file = test_helpers::temp_file{"arude_binary_bad_file.toml"};
+    test_helpers::write_text(file.path(), "version = 1\n[credentials]\nsecret = \"!!!!\"\n");
 
-    auto manager = arude::config::config_manager{};
-    auto document =
-      manager.register_document(arude::config::endpoint_toml{}, arude::config::transport_file{file.path()});
-    auto section = document.add_section<binary_test::vault>("vault");
+    auto config = arude::config::config_file<binary_test::vault, arude::config::transport_file>{
+      arude::config::transport_file{file.path()}};
 
-    THEN("loading the document is an invalid_payload naming the field and the base64 failure")
+    THEN("loading the file is an invalid_payload naming the field and the base64 failure")
     {
       try
       {
-        document.load();
+        config.load();
         FAIL("loading a payload that is not base64 should have thrown");
       }
       catch(const arude::config::exception_t& ex)
@@ -297,7 +295,7 @@ SCENARIO("a binary field in a table that is not base64 fails the load as invalid
         REQUIRE(ex.str().contains("is not a base64 character"));
       }
 
-      REQUIRE(!section.loaded());
+      REQUIRE(!config.loaded());
     }
   }
 }

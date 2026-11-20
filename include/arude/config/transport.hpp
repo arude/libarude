@@ -10,17 +10,16 @@
 /// in.
 ///
 /// A transport carries its own address, in its own natural type — a path, a
-/// URL, an EEPROM slot — and deals in bytes, not text. An endpoint deals in
-/// documents and knows nothing about files or sockets; a transport deals in
-/// bytes and knows nothing about TOML or versions. Neither has to be touched
-/// when the other gains a member.
+/// URL, an EEPROM slot — and deals in bytes, not text. A config_file deals in
+/// a configuration and knows nothing about files or sockets; a transport
+/// deals in bytes and knows nothing about TOML or versions. Neither has to be
+/// touched when the other gains a member.
 ///
 /// The contract is a concept rather than a base class: a transport has state
 /// (its address) and its operations are ordinary const members, so there is
 /// nothing to inherit and no virtuals to route through. Read and write take no
 /// address because the address is the instance's own — one blob per transport
-/// instance is the assumption the whole design rests on, and what sections
-/// exist to make survivable.
+/// instance is the assumption the whole design rests on.
 ///
 /// A read is one step: it returns the bytes, or says that there is nothing at
 /// the address, in a single request. There is no separate question of whether
@@ -51,16 +50,16 @@ namespace arude::config
 
 ///
 /// The transport contract.
-/// Tr::name is a plain label for diagnostics. location() is what the manager
-/// keys on and what errors quote; it is the transport's own business to prefix
-/// it with its name, so a file and an EEPROM slot spelled alike stay distinct.
+/// Tr::name is a plain label for diagnostics. location() is what errors quote;
+/// it is the transport's own business to prefix it with its name, so a file
+/// and an EEPROM slot spelled alike stay distinct.
 ///
 /// read() returns the bytes at the address, or std::nullopt where nothing is
 /// there, and means nothing else by std::nullopt. Every other failure throws:
 /// an exception_t with the error that fits, usually io_error, or anything
-/// else, which a document reports as io_error. A failure must never come back
-/// as std::nullopt. load_policy::create would then hand out defaults for a
-/// source that is there but could not be read, and the next store() would
+/// else, which a config_file reports as io_error. A failure must never come
+/// back as std::nullopt. load_policy::create would then hand out defaults for
+/// a source that is there but could not be read, and the next store() would
 /// overwrite it with them.
 ///
 /// read() and write() may take a trailing std::source_location as well, which
@@ -81,7 +80,7 @@ concept transport_c = std::move_constructible<Tr> && requires(const Tr& carrier,
 
 ///
 /// A transport whose address is a filesystem path.
-/// Exists so a medium-integrated endpoint can require it and fail at the
+/// Exists so a medium-integrated component can require it and fail at the
 /// interface when it is mispaired with a transport that has no path.
 ///
 /// \tparam Tr Type to test.

@@ -209,7 +209,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
 # PUBLIC for the same reason: the headers in arude/config/ include reflect-cpp's,
 # so a consumer compiles them itself and links what they compile. toml++ is named
 # beside it rather than left to arrive through reflect-cpp's own link, because
-# libarude includes it directly: the TOML endpoint's tree is a toml::table.
+# libarude includes it directly: the TOML machinery parses into a toml::table.
 #
 # The definition goes the same way round as the option: defined only when the
 # support was declined, so a consumer who builds against these headers without
@@ -376,11 +376,15 @@ if(BUILD_TESTING)
   # the /GR CMake puts in CMAKE_CXX_FLAGS; the later option wins, as intended.
   add_executable(${PROJECT_NAME}_test_type_key_no_rtti test/config/test_type_key_no_rtti.cpp)
 
-  # The configuration support's type index is keyed on what arude/type_key.hpp
-  # gives, so its use from a consumer without RTTI is tested here too, against
-  # the library built with RTTI.
+  # The configuration support also builds without RTTI, so a config_file over
+  # the in-memory transport loads, migrates and stores in that build too. The
+  # helper lives under test/configuration/, which the ARUDE_NO_CONFIG filter
+  # drops from the main binary, so its source is named here rather than globbed.
   if(NOT ARUDE_NO_CONFIG)
-    target_sources(${PROJECT_NAME}_test_type_key_no_rtti PRIVATE test/config/test_config_no_rtti.cpp)
+    target_sources(
+      ${PROJECT_NAME}_test_type_key_no_rtti
+      PRIVATE test/config/test_config_no_rtti.cpp test/configuration/helpers/memory_transport.cpp
+    )
   endif()
   set_target_properties(${PROJECT_NAME}_test_type_key_no_rtti
                         PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}

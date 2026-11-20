@@ -23,6 +23,7 @@
 #include "arude/config/toml_writer.hpp"
 #include "arude/type_name.hpp"
 
+#include <rfl/always_false.hpp>
 #include <rfl/enums.hpp>
 #include <rfl/internal/enums/StringConverter.hpp>
 #include <rfl/internal/has_reflection_type_v.hpp>
@@ -35,6 +36,8 @@
 #include <toml++/toml.hpp>
 
 #include <charconv>
+#include <chrono>
+#include <cmath>
 #include <concepts>
 #include <cstdint>
 #include <expected>
@@ -43,6 +46,7 @@
 #include <map>
 #include <optional>
 #include <ranges>
+#include <ratio>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -563,6 +567,394 @@ auto Parser<arude::config::detail::toml_reader, arude::config::detail::toml_writ
   const E& val) -> std::string
 {
   return internal::enums::StringConverter<E>::enum_to_string(val);
+}
+
+///
+/// Reads and writes a std::chrono::duration as the table reflect-cpp writes
+/// today: `{ count = <int>, unit = '<name>' }`. Replaces reflect-cpp's own
+/// duration parser, which cannot build under rfl::DefaultIfMissing because
+/// its unit literal has no default constructor; this one holds the unit as a
+/// plain string, and refuses a unit name or a count the target duration
+/// cannot hold without loss, which the replaced parser silently truncates.
+///
+/// \tparam Rep The duration's representation.
+/// \tparam Period The duration's period.
+/// \tparam ProcessorsType The processors the read runs under.
+///
+template<typename Rep, typename Period, typename ProcessorsType>
+  requires AreReaderAndWriter<
+    arude::config::detail::toml_reader,
+    arude::config::detail::toml_writer,
+    std::chrono::duration<Rep, Period>>
+struct Parser<
+  arude::config::detail::toml_reader,
+  arude::config::detail::toml_writer,
+  std::chrono::duration<Rep, Period>,
+  ProcessorsType>
+{
+public: // Typedefs
+  ///
+  /// \see rfl::toml::Reader::InputVarType
+  ///
+  using input_var_t = arude::config::detail::toml_reader::InputVarType;
+
+  ///
+  /// The duration type.
+  ///
+  using duration_t = std::chrono::duration<Rep, Period>;
+
+public: // Methods
+  ///
+  /// Reads a count and a unit as a duration, refusing what the duration
+  /// cannot hold without loss.
+  /// \param reader The reader, for the table's fields.
+  /// \param var The node holding the table.
+  /// \return The duration, or why the table does not hold one.
+  ///
+  [[nodiscard]] static auto read(const arude::config::detail::toml_reader& reader, const input_var_t& var) noexcept
+    -> Result<duration_t>;
+
+  ///
+  /// Writes the duration as a count in the unit its period names.
+  /// \tparam P The parent type, as rfl::parsing::Parent spells it.
+  /// \param writer The writer.
+  /// \param val The duration.
+  /// \param parent The parent holding the field.
+  ///
+  template<typename P>
+  static auto write(const arude::config::detail::toml_writer& writer, const duration_t& val, const P& parent) noexcept
+    -> void;
+
+  ///
+  /// Generates the schema of the table a duration is held in.
+  /// \param definitions Schema definitions collected so far.
+  /// \return The schema.
+  ///
+  static auto to_schema(std::map<std::string, schema::Type>* definitions) -> schema::Type;
+
+private: // Types
+  ///
+  /// The table the duration is held in. The unit is a plain string, which
+  /// is what keeps the type default-constructible under
+  /// rfl::DefaultIfMissing.
+  ///
+  struct table_t
+  {
+    ///
+    /// The count.
+    ///
+    std::int64_t count = 0;
+
+    ///
+    /// The unit's name.
+    ///
+    std::string unit = "seconds";
+  };
+
+private: // Helpers
+  ///
+  /// The unit a duration type spells, which is also how it is written.
+  /// \tparam Unit The duration type, one of the ten chrono durations TOML's
+  ///              table can name.
+  /// \return The unit's name.
+  ///
+  template<typename Unit>
+  [[nodiscard]] static consteval auto unit_name() -> std::string_view;
+
+  ///
+  /// Converts a count in the unit given to the target duration, refusing a
+  /// value the duration cannot hold without loss.
+  /// \tparam Unit The duration type the count is in.
+  /// \param count The count.
+  /// \return The duration, or why the count does not fit.
+  ///
+  template<typename Unit>
+  [[nodiscard]] static auto convert(std::int64_t count) -> Result<duration_t>;
+
+  ///
+  /// Converts a count and a unit name to the target duration.
+  /// \param value The table read.
+  /// \return The duration, or why the table does not hold one.
+  ///
+  [[nodiscard]] static auto to_duration(const table_t& value) -> Result<duration_t>;
+};
+
+///
+///
+template<typename Rep, typename Period, typename ProcessorsType>
+  requires AreReaderAndWriter<
+    arude::config::detail::toml_reader,
+    arude::config::detail::toml_writer,
+    std::chrono::duration<Rep, Period>>
+auto Parser<
+  arude::config::detail::toml_reader,
+  arude::config::detail::toml_writer,
+  std::chrono::duration<Rep, Period>,
+  ProcessorsType>::read(const arude::config::detail::toml_reader& reader, const input_var_t& var) noexcept
+  -> Result<duration_t>
+{
+  const auto found =
+    Parser<arude::config::detail::toml_reader, arude::config::detail::toml_writer, table_t, ProcessorsType>::read(
+      reader, var);
+
+  if(!found.has_value())
+  {
+    return error(found.error());
+  }
+
+  return to_duration(*found);
+}
+
+///
+///
+template<typename Rep, typename Period, typename ProcessorsType>
+  requires AreReaderAndWriter<
+    arude::config::detail::toml_reader,
+    arude::config::detail::toml_writer,
+    std::chrono::duration<Rep, Period>>
+template<typename P>
+auto Parser<
+  arude::config::detail::toml_reader,
+  arude::config::detail::toml_writer,
+  std::chrono::duration<Rep, Period>,
+  ProcessorsType>::
+  write(const arude::config::detail::toml_writer& writer, const duration_t& val, const P& parent) noexcept -> void
+{
+  const auto held =
+    table_t{.count = static_cast<std::int64_t>(val.count()), .unit = std::string{unit_name<duration_t>()}};
+
+  Parser<arude::config::detail::toml_reader, arude::config::detail::toml_writer, table_t, ProcessorsType>::write(
+    writer, held, parent);
+}
+
+///
+///
+template<typename Rep, typename Period, typename ProcessorsType>
+  requires AreReaderAndWriter<
+    arude::config::detail::toml_reader,
+    arude::config::detail::toml_writer,
+    std::chrono::duration<Rep, Period>>
+auto Parser<
+  arude::config::detail::toml_reader,
+  arude::config::detail::toml_writer,
+  std::chrono::duration<Rep, Period>,
+  ProcessorsType>::to_schema(std::map<std::string, schema::Type>* definitions) -> schema::Type
+{
+  return Parser<arude::config::detail::toml_reader, arude::config::detail::toml_writer, table_t, ProcessorsType>::
+    to_schema(definitions);
+}
+
+///
+///
+template<typename Rep, typename Period, typename ProcessorsType>
+  requires AreReaderAndWriter<
+    arude::config::detail::toml_reader,
+    arude::config::detail::toml_writer,
+    std::chrono::duration<Rep, Period>>
+template<typename Unit>
+consteval auto Parser<
+  arude::config::detail::toml_reader,
+  arude::config::detail::toml_writer,
+  std::chrono::duration<Rep, Period>,
+  ProcessorsType>::unit_name() -> std::string_view
+{
+  if constexpr(std::same_as<Unit, std::chrono::nanoseconds>)
+  {
+    return "nanoseconds";
+  }
+  else if constexpr(std::same_as<Unit, std::chrono::microseconds>)
+  {
+    return "microseconds";
+  }
+  else if constexpr(std::same_as<Unit, std::chrono::milliseconds>)
+  {
+    return "milliseconds";
+  }
+  else if constexpr(std::same_as<Unit, std::chrono::seconds>)
+  {
+    return "seconds";
+  }
+  else if constexpr(std::same_as<Unit, std::chrono::minutes>)
+  {
+    return "minutes";
+  }
+  else if constexpr(std::same_as<Unit, std::chrono::hours>)
+  {
+    return "hours";
+  }
+  else if constexpr(std::same_as<Unit, std::chrono::days>)
+  {
+    return "days";
+  }
+  else if constexpr(std::same_as<Unit, std::chrono::weeks>)
+  {
+    return "weeks";
+  }
+  else if constexpr(std::same_as<Unit, std::chrono::months>)
+  {
+    return "months";
+  }
+  else if constexpr(std::same_as<Unit, std::chrono::years>)
+  {
+    return "years";
+  }
+  else
+  {
+    static_assert(
+      always_false_v<Unit>,
+      "arude::config: a std::chrono::duration is written in the unit its period names; this period names none of the "
+      "ten.");
+  }
+}
+
+///
+///
+template<typename Rep, typename Period, typename ProcessorsType>
+  requires AreReaderAndWriter<
+    arude::config::detail::toml_reader,
+    arude::config::detail::toml_writer,
+    std::chrono::duration<Rep, Period>>
+template<typename Unit>
+auto Parser<
+  arude::config::detail::toml_reader,
+  arude::config::detail::toml_writer,
+  std::chrono::duration<Rep, Period>,
+  ProcessorsType>::convert(const std::int64_t count) -> Result<duration_t>
+{
+  // The target tick count is the count scaled by the ratio of the two
+  // periods, reduced at compile time. The multiplication is checked in
+  // int64 before it is taken, and the division must come out exact, so
+  // neither an overflow nor a truncation can slip through.
+  constexpr auto ratio = std::ratio_divide<typename Unit::period, Period>{};
+  constexpr auto num = static_cast<std::int64_t>(ratio.num);
+  constexpr auto den = static_cast<std::int64_t>(ratio.den);
+
+  const auto refuse = [count] -> Result<duration_t>
+  {
+    return error(
+      std::format(
+        "the value of {} {} cannot be represented as {} without loss.",
+        count,
+        unit_name<Unit>(),
+        arude::type_name<duration_t>()));
+  };
+
+  if constexpr(std::integral<Rep>)
+  {
+    // count * num, checked before it is taken. Both periods are positive,
+    // so a normalised ratio keeps num non-negative.
+    auto overflowed = false;
+
+    if(count > 0)
+    {
+      overflowed = num > std::numeric_limits<std::int64_t>::max() / count;
+    }
+    else if(count < 0)
+    {
+      if(count == std::numeric_limits<std::int64_t>::min())
+      {
+        overflowed = num > 1;
+      }
+      else
+      {
+        overflowed = num > std::numeric_limits<std::int64_t>::max() / -count;
+      }
+    }
+
+    const auto product = overflowed ? std::int64_t{0} : count * num;
+    const auto ticks = product / den;
+
+    const auto fits = ticks >= static_cast<std::int64_t>(std::numeric_limits<Rep>::min()) &&
+                      ticks <= static_cast<std::int64_t>(std::numeric_limits<Rep>::max());
+
+    if(overflowed || product % den != 0 || !fits)
+    {
+      return refuse();
+    }
+
+    return duration_t{static_cast<Rep>(ticks)};
+  }
+  else
+  {
+    // A floating-point representation: the range is what is checked.
+    const auto ticks = static_cast<long double>(count) * ratio.num / ratio.den;
+
+    if(
+      !std::isfinite(ticks) ||
+      ticks < static_cast<long double>(std::numeric_limits<Rep>::lowest()) ||
+      ticks > static_cast<long double>(std::numeric_limits<Rep>::max()))
+    {
+      return refuse();
+    }
+
+    return duration_t{static_cast<Rep>(ticks)};
+  }
+}
+
+///
+///
+template<typename Rep, typename Period, typename ProcessorsType>
+  requires AreReaderAndWriter<
+    arude::config::detail::toml_reader,
+    arude::config::detail::toml_writer,
+    std::chrono::duration<Rep, Period>>
+auto Parser<
+  arude::config::detail::toml_reader,
+  arude::config::detail::toml_writer,
+  std::chrono::duration<Rep, Period>,
+  ProcessorsType>::to_duration(const table_t& value) -> Result<duration_t>
+{
+  if(value.unit == "nanoseconds")
+  {
+    return convert<std::chrono::nanoseconds>(value.count);
+  }
+
+  if(value.unit == "microseconds")
+  {
+    return convert<std::chrono::microseconds>(value.count);
+  }
+
+  if(value.unit == "milliseconds")
+  {
+    return convert<std::chrono::milliseconds>(value.count);
+  }
+
+  if(value.unit == "seconds")
+  {
+    return convert<std::chrono::seconds>(value.count);
+  }
+
+  if(value.unit == "minutes")
+  {
+    return convert<std::chrono::minutes>(value.count);
+  }
+
+  if(value.unit == "hours")
+  {
+    return convert<std::chrono::hours>(value.count);
+  }
+
+  if(value.unit == "days")
+  {
+    return convert<std::chrono::days>(value.count);
+  }
+
+  if(value.unit == "weeks")
+  {
+    return convert<std::chrono::weeks>(value.count);
+  }
+
+  if(value.unit == "months")
+  {
+    return convert<std::chrono::months>(value.count);
+  }
+
+  if(value.unit == "years")
+  {
+    return convert<std::chrono::years>(value.count);
+  }
+
+  return error(std::format("'{}' is not a unit of a std::chrono::duration.", value.unit));
 }
 
 } // namespace rfl::parsing

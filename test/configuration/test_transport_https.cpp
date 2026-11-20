@@ -843,8 +843,8 @@ SCENARIO("an https transport writes only when it is writable", "[config][transpo
   }
 }
 
-// Userinfo would put a password into location(), which the manager keys on and
-// every error quotes, so it is refused, and the refusal does not quote it either.
+// Userinfo would put a password into location(), which every error quotes, so
+// it is refused, and the refusal does not quote it either.
 SCENARIO("an https transport refuses a URL it cannot use", "[config][transport][transport_https]")
 {
   using arude::config::config_error;
