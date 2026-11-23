@@ -39,7 +39,9 @@
 #include <rfl/Variant.hpp>
 #include <toml++/toml.hpp>
 
+#include <array>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <map>
@@ -269,6 +271,29 @@ struct variant_alternatives<rfl::TaggedUnion<Discriminator, Alternatives...>>
 };
 
 ///
+/// Whether a struct that reflect-cpp reflects field by field holds a
+/// versioned<> member at any depth. A partial specialisation rather than an
+/// if constexpr branch, so rfl::named_tuple_t is never named for a type that
+/// is not such a struct: MSVC instantiates a discarded branch inside a lambda
+/// in a class template, and named_tuple_t of an int does not compile.
+///
+/// \tparam T Type to test.
+///
+template<typename T, bool = std::is_class_v<T> && std::is_aggregate_v<T>>
+struct reflected_contains_versioned : std::false_type
+{};
+
+///
+/// \see reflected_contains_versioned
+///
+/// \tparam T A struct reflect-cpp reflects field by field.
+///
+template<typename T>
+struct reflected_contains_versioned<T, true>
+  : std::bool_constant<named_tuple_contains_versioned<rfl::named_tuple_t<T>>::value>
+{};
+
+///
 /// \see contains_versioned
 ///
 template<typename T>
@@ -278,25 +303,9 @@ struct contains_versioned
   /// true if T is a versioned<>, or a variant, a reflected aggregate or a
   /// container holding one at any depth.
   ///
-  static constexpr auto value = [] -> bool
-  {
-    if constexpr(is_versioned_v<T>)
-    {
-      return true;
-    }
-    else if constexpr(variant_alternatives<T>::present)
-    {
-      return variant_alternatives<T>::holds_versioned;
-    }
-    else if constexpr(std::is_aggregate_v<T>)
-    {
-      return named_tuple_contains_versioned<rfl::named_tuple_t<T>>::value;
-    }
-    else
-    {
-      return false;
-    }
-  }();
+  static constexpr auto value = std::conditional_t < is_versioned_v<T> || variant_alternatives<T>::present,
+                        std::bool_constant<is_versioned_v<T> || variant_alternatives<T>::holds_versioned>,
+                        reflected_contains_versioned < T >> ::value;
 };
 
 ///
@@ -319,6 +328,19 @@ struct contains_versioned<std::vector<U, Allocator>>
 {
   ///
   /// true if an element does.
+  ///
+  static constexpr auto value = contains_versioned<U>::value;
+};
+
+///
+/// \see contains_versioned
+///
+template<typename U, std::size_t N>
+struct contains_versioned<std::array<U, N>>
+{
+  ///
+  /// true if the element type does. Specialised because std::array is an
+  /// aggregate, which reflect-cpp reads as an array rather than a struct.
   ///
   static constexpr auto value = contains_versioned<U>::value;
 };
@@ -378,6 +400,27 @@ struct named_tuple_variant_with_versioned<rfl::NamedTuple<Fields...>>
 };
 
 ///
+/// Whether a struct that reflect-cpp reflects field by field holds, in a
+/// field, a variant whose alternatives hold a versioned<> member.
+/// \see reflected_contains_versioned for why this is a specialisation.
+///
+/// \tparam T Type to test.
+///
+template<typename T, bool = std::is_class_v<T> && std::is_aggregate_v<T>>
+struct reflected_variant_with_versioned : std::false_type
+{};
+
+///
+/// \see reflected_variant_with_versioned
+///
+/// \tparam T A struct reflect-cpp reflects field by field.
+///
+template<typename T>
+struct reflected_variant_with_versioned<T, true>
+  : std::bool_constant<named_tuple_variant_with_versioned<rfl::named_tuple_t<T>>::value>
+{};
+
+///
 /// \see variant_with_versioned
 ///
 template<typename T>
@@ -386,21 +429,10 @@ struct variant_with_versioned
   ///
   /// true if T is such a variant, or holds one in a field or a container.
   ///
-  static constexpr auto value = [] -> bool
-  {
-    if constexpr(variant_alternatives<T>::present)
-    {
-      return variant_alternatives<T>::holds_versioned;
-    }
-    else if constexpr(std::is_aggregate_v<T>)
-    {
-      return named_tuple_variant_with_versioned<rfl::named_tuple_t<T>>::value;
-    }
-    else
-    {
-      return false;
-    }
-  }();
+  static constexpr auto value = std::conditional_t<
+    variant_alternatives<T>::present,
+    std::bool_constant<variant_alternatives<T>::holds_versioned>,
+    reflected_variant_with_versioned<T>>::value;
 };
 
 ///
@@ -411,6 +443,19 @@ struct variant_with_versioned<std::optional<U>>
 {
   ///
   /// true if the element is one.
+  ///
+  static constexpr auto value = variant_with_versioned<U>::value;
+};
+
+///
+/// \see variant_with_versioned
+///
+template<typename U, std::size_t N>
+struct variant_with_versioned<std::array<U, N>>
+{
+  ///
+  /// true if the element type is one. Specialised because std::array is an
+  /// aggregate, which reflect-cpp reads as an array rather than a struct.
   ///
   static constexpr auto value = variant_with_versioned<U>::value;
 };
@@ -660,6 +705,9 @@ struct Parser<
   ProcessorsType>
 {
 public: // Typedefs
+  ///
+  /// The node type reflect-cpp hands the reader.
+  ///
   // NOLINTNEXTLINE(readability-identifier-naming): reflect-cpp's spelling.
   using InputVarType = arude::config::detail::toml_reader::InputVarType;
 

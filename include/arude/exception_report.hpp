@@ -134,14 +134,24 @@ struct exception_link
 };
 
 ///
-/// Returns the exception nested in another, if there is one.
-/// Rethrowing is how a nested exception is reached without RTTI, the same route
-/// arude::exception_report() takes.
+/// Rethrows the exception nested in the one being handled, if there is one.
+/// std::rethrow_if_nested finds the nesting with dynamic_cast, which libc++
+/// refuses to compile without RTTI. Catching std::nested_exception finds it
+/// through the exception machinery instead, which works with RTTI or without.
 ///
-/// \param ex The exception, as caught.
+/// Call it only from inside a catch block.
+///
+/// \throws Whatever is nested in the exception being handled.
+///
+auto rethrow_current_nested() -> void;
+
+///
+/// Returns the exception nested in the one being handled, if there is one.
+/// Call it only from inside a catch block.
+///
 /// \return The nested exception, or null where there is none.
 ///
-[[nodiscard]] auto nested_exception_of(const auto& ex) -> std::exception_ptr;
+[[nodiscard]] auto current_nested_exception() -> std::exception_ptr;
 
 ///
 /// Reads the message of an exception and the exception nested in it.
@@ -155,11 +165,35 @@ struct exception_link
 
 ///
 ///
-auto nested_exception_of(const auto& ex) -> std::exception_ptr
+inline auto rethrow_current_nested() -> void
 {
   try
   {
-    std::rethrow_if_nested(ex);
+    throw;
+  }
+  catch(const std::nested_exception& nested)
+  {
+    // A nested_exception made outside a catch block holds nothing, and
+    // rethrow_nested() on that terminates.
+    if(nested.nested_ptr() != nullptr)
+    {
+      nested.rethrow_nested();
+    }
+  }
+  catch(...)
+  {
+    // Not a nested_exception, so there is nothing nested to rethrow.
+    return;
+  }
+}
+
+///
+///
+inline auto current_nested_exception() -> std::exception_ptr
+{
+  try
+  {
+    rethrow_current_nested();
   }
   catch(...)
   {
@@ -204,11 +238,11 @@ inline auto read_exception_link(const std::exception_ptr& eptr) -> exception_lin
   }
   catch(const exception_base& ex)
   {
-    return {.message = ex.str(), .nested = nested_exception_of(ex)};
+    return {.message = ex.str(), .nested = current_nested_exception()};
   }
   catch(const std::exception& ex)
   {
-    return {.message = ex.what(), .nested = nested_exception_of(ex)};
+    return {.message = ex.what(), .nested = current_nested_exception()};
   }
   catch(...)
   {
@@ -319,7 +353,7 @@ inline auto exception_report() -> exception_string_t
     catch(const exception_base& ex)
     {
       nested_string = std::format("{}{}", nested_string, ex.to_string());
-      std::rethrow_if_nested(ex);
+      detail::rethrow_current_nested();
     }
 // <expected> exists as a header on toolchains that do not implement it, so the
 // include alone proves nothing; this is the feature test that does. Where it is
@@ -329,23 +363,23 @@ inline auto exception_report() -> exception_string_t
     catch(const std::bad_expected_access<std::string>& ex)
     {
       nested_string += std::format("std::bad_expected_access - Error: {}", ex.error());
-      std::rethrow_if_nested(ex);
+      detail::rethrow_current_nested();
     }
     catch(const std::bad_expected_access<void>& ex)
     {
       nested_string += std::format("std::bad_expected_access {}", ex.what());
-      std::rethrow_if_nested(ex);
+      detail::rethrow_current_nested();
     }
 #endif // #if (defined __cpp_lib_expected)
     catch(const std::system_error& ex)
     {
       nested_string += std::format("std::system_error: {} ({})", ex.what(), ex.code().value());
-      std::rethrow_if_nested(ex);
+      detail::rethrow_current_nested();
     }
     catch(const std::exception& ex)
     {
       nested_string += ex.what();
-      std::rethrow_if_nested(ex);
+      detail::rethrow_current_nested();
     }
     catch(...)
     {
