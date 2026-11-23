@@ -10,6 +10,7 @@
 #include "arude/config/transport_file.hpp"
 #include "arude/config/common.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -23,10 +24,32 @@
 #include <span>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace arude::config::detail
 {
+
+namespace
+{
+
+///
+/// How often an open or a rename that another handle got in the way of is
+/// tried, and how long to wait between tries: about a tenth of a second in
+/// all. On Windows a file cannot be renamed over while it is open without
+/// shared deletion, which a std::ifstream is, nor opened while a rename over
+/// it is under way, so a load and a store of one file at the same moment
+/// collide there. Elsewhere neither happens, and a failure that is not
+/// transient fails the same way on every try.
+///
+constexpr auto transient_attempts = 50;
+
+///
+/// \see transient_attempts
+///
+constexpr auto transient_pause = std::chrono::milliseconds{2};
+
+} // namespace
 
 ///
 ///
@@ -34,6 +57,20 @@ auto read_file(const std::filesystem::path& path, const std::source_location loc
   -> std::optional<std::vector<std::byte>>
 {
   auto stream = std::ifstream{path, std::ios::binary};
+
+  // Tried again only while something is at the path, so a missing file is
+  // reported at once; see transient_attempts.
+  for(auto attempt = 1; !stream.is_open() && attempt < transient_attempts; ++attempt)
+  {
+    if(auto unexamined = std::error_code{};
+       std::filesystem::status(path, unexamined).type() == std::filesystem::file_type::not_found)
+    {
+      break;
+    }
+
+    std::this_thread::sleep_for(transient_pause);
+    stream = std::ifstream{path, std::ios::binary};
+  }
 
   if(!stream.is_open())
   {
@@ -159,6 +196,18 @@ auto write_file(
 
     auto error = std::error_code{};
     std::filesystem::rename(temporary, target, error);
+
+    // A reader holding the file open refuses the rename on Windows for as
+    // long as it reads; see transient_attempts.
+    for(auto attempt = 1; error &&
+                          (error == std::errc::permission_denied || error == std::errc::device_or_resource_busy) &&
+                          attempt < transient_attempts;
+        ++attempt)
+    {
+      std::this_thread::sleep_for(transient_pause);
+      error.clear();
+      std::filesystem::rename(temporary, target, error);
+    }
 
     if(error)
     {

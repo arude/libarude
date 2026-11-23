@@ -11,7 +11,6 @@
 #include "arude/exception.hpp"
 #include "test/helpers/config_test_v1.hpp"
 #include "test/helpers/config_test_v2.hpp"
-#include "test/helpers/temp_directory.hpp"
 #include "test/helpers/temp_file.hpp"
 #include "test/helpers/write_text.hpp"
 
@@ -35,6 +34,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -633,34 +633,49 @@ SCENARIO("text that is not a configuration says so", "[config][toml]")
 
 SCENARIO("a failure message carries one prefix and quotes what was written as written", "[config][toml]")
 {
-  GIVEN("a store below a directory whose name spells the library's prefix, where a file blocks the way")
+  GIVEN("an inner message that quotes a path whose name spells the library's prefix")
   {
-    const auto root = test_helpers::temp_directory{"arude_toml_prefix_path"};
-    const auto spelled = root.path() / "arude::config: d";
-    std::filesystem::create_directories(spelled);
-    test_helpers::write_text(spelled / "blocker", "x");
-    const auto blocked = spelled / "blocker" / "sub";
+    // The path is written into the message rather than created: ':' cannot
+    // be part of a file name on Windows, and a standard library quotes paths
+    // in its errors as it sees fit. What is under test is the quoting.
+    static constexpr auto inner =
+      std::string_view{"arude::config: cannot create directories: Not a directory [/tmp/arude::config: d/sub]"};
 
-    auto file = arude::config::config_file<test_helpers::config_test_t, arude::config::transport_file>{
-      arude::config::transport_file{blocked / "app.toml"}};
-    file.set(test_helpers::config_test_t{});
-
-    THEN("the nested filesystem error still quotes the path as it was written")
+    THEN("the prefix that begins it goes, and the one inside the quoted path stays")
     {
+      auto quoted = std::string{};
+
       try
       {
-        file.store();
-        FAIL("a store below a regular file should have been refused");
+        throw std::runtime_error{std::string{inner}};
       }
-      catch(const arude::config::exception_t& ex)
+      catch(...)
       {
-        const auto message = std::string{ex.str()};
-        INFO(std::format("The message is: {}", message));
-        REQUIRE(ex.data() == arude::config::config_error::io_error);
-        REQUIRE(message.starts_with("arude::config: "));
-        REQUIRE(!message.substr(1).starts_with("arude::config: "));
-        REQUIRE(message.contains(std::format("[{}]", blocked.string())));
+        quoted = arude::config::detail::nested_message();
       }
+
+      REQUIRE(quoted == "cannot create directories: Not a directory [/tmp/arude::config: d/sub]");
+    }
+  }
+
+  GIVEN("an inner message quoting another after the ': ' that introduces it")
+  {
+    static constexpr auto inner = std::string_view{"arude::config: outer: arude::config: inner"};
+
+    THEN("both prefixes go, as each begins a message")
+    {
+      auto quoted = std::string{};
+
+      try
+      {
+        throw std::runtime_error{std::string{inner}};
+      }
+      catch(...)
+      {
+        quoted = arude::config::detail::nested_message();
+      }
+
+      REQUIRE(quoted == "outer: inner");
     }
   }
 

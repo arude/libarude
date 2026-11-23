@@ -161,13 +161,15 @@ SCENARIO("type_key treats qualifiers and references as typeid does", "[type_key]
     }
   }
 
-  GIVEN("an array of const elements")
+  GIVEN("arrays of different lengths")
   {
-    THEN("it shares the key of the array of unqualified elements")
+    THEN("they have different keys")
     {
+      // Whether an array of const elements shares the key of the array of
+      // unqualified ones is not pinned: typeid answers yes with libstdc++
+      // and libc++ and no with MSVC, and type_key with RTTI is typeid.
       // The array types are what is under test, so std::array would miss the point.
       // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-      REQUIRE(arude::type_key<const int[3]>() == arude::type_key<int[3]>());
       REQUIRE(arude::type_key<int[3]>() != arude::type_key<int[4]>());
       // NOLINTEND(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     }

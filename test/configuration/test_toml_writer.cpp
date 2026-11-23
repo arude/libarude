@@ -461,7 +461,15 @@ SCENARIO("text that is not valid UTF-8 is refused rather than silently changed",
   GIVEN("a configuration whose text holds valid multibyte text")
   {
     auto value = toml_writer_test::writer_config{};
-    value.text = "\u00e9\u20ac\U0001F600\uffff\U0010FFFF";
+    // Spelled as UTF-8 bytes rather than as \u escapes, which a compiler
+    // encodes in its execution character set: MSVC's is the Windows code
+    // page unless /utf-8 is given, which turns the escapes into other bytes.
+    // U+00E9, U+20AC, U+1F600, U+FFFF and U+10FFFF.
+    value.text = std::string{"\xC3\xA9"
+                             "\xE2\x82\xAC"
+                             "\xF0\x9F\x98\x80"
+                             "\xEF\xBF\xBF"
+                             "\xF4\x8F\xBF\xBF"};
 
     WHEN("it is written and read back")
     {
