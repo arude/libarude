@@ -11,6 +11,85 @@ A utility and helper library for C++ projects.
 > **Status: early.** The repository is being rebuilt from scratch. There is not
 > much here yet.
 
+## Configuration
+
+`arude/config.hpp` keeps a C++ struct in a TOML file. The struct is a plain
+aggregate that carries its own version; a member wrapped in
+`arude::config::versioned<>` is versioned on its own.
+
+```cpp
+#include "arude/config.hpp"
+
+struct network_config
+{
+  static constexpr auto config_version = arude::config::version_t{1};
+  arude::config::version_t version = config_version;
+  std::string host = "localhost";
+  std::uint16_t port = 8080;
+};
+
+struct app_config
+{
+  static constexpr auto config_version = arude::config::version_t{1};
+  arude::config::version_t version = config_version;
+  std::string name = "demo";
+  std::chrono::sys_seconds started{};
+  arude::config::versioned<network_config> network;
+};
+
+auto file = arude::config::config_file<app_config, arude::config::transport_file>{
+  arude::config::transport_file{"app.toml"}};
+
+file.load();                                      // One read, one parse, the whole struct.
+auto network = file.member(&app_config::network); // Hand a subsystem one member.
+auto value = network.get();
+value.port = 8443;
+network.set(value);
+file.store();                                     // Replaces the file in one step.
+```
+
+```toml
+name = "demo"
+started = 2026-01-02T03:04:05Z
+version = 1
+
+[network]
+host = "example.org"
+port = 8443
+version = 1
+```
+
+- **Versions.** When a type changes, add a new type for the new version that
+  names the old one as `previous_t`, and an `upgrade()` from the old one; see
+  `arude/config/migration.hpp`. `load()` migrates an older file, and refuses
+  one written by a newer build.
+- **Missing parts.** A missing file, member or field is an error, unless
+  `load_policy::create` is given, in which case it takes the struct's default.
+- **What a store keeps.** The file is written from the struct, so keys and
+  tables the struct does not declare, and comments, are not kept. `store()`
+  refuses to write over a file this build cannot read, or one a newer build
+  wrote; `overwrite()` does so on purpose.
+- **Dates and times.** TOML's four date and time types read and write as
+  `std::chrono::sys_time`, `local_time`, `year_month_day` and `hh_mm_ss`.
+- **Transports.** `transport_file`, and `transport_https` with
+  `-DARUDE_HTTPS=ON`. `to_toml()` and `from_toml()` work on text directly.
+
+### reflect-cpp
+
+The struct conversion is reflect-cpp's, pinned at 0.19.0 with toml++ 3.4.0 in
+`CMakeLists.txt`. libarude builds on more than its public API: it specialises
+`rfl::parsing::Parser` for `versioned<>`, enumerations, durations, and dates and
+times; replaces the internal `rfl::parsing::MapReader`; derives its TOML reader
+and writer from reflect-cpp's; and names `rfl::internal` in a few places. Those
+are reflect-cpp's implementation, so treat a reflect-cpp upgrade as a change of
+its own: bump the version and run the whole suite, the
+`test/configuration/test_toml_*` files above all.
+
+Two of its limits show through. A non-flag enumeration whose underlying type is
+not `int` needs `rfl::config::enum_range` specialised for it, and a
+`std::variant` alternative cannot hold a `versioned<>` member, as reflect-cpp
+takes the first alternative that parses; both are compile errors that say so.
+
 ## Building
 
 Requires CMake 4.2 or newer, Ninja, and a C++23-capable compiler — Clang 21 is

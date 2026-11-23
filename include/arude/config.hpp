@@ -44,6 +44,11 @@
 /// such an enum does not compile in a configuration without the
 /// specialisation.
 ///
+/// The support builds on reflect-cpp's implementation as well as its public
+/// API: it specialises rfl::parsing::Parser and rfl::parsing::MapReader for its
+/// own reader and writer. reflect-cpp is pinned for that reason, and an
+/// upgrade of it is a change to test on its own; see README.md.
+///
 
 #include "arude/config/base64.hpp"
 #include "arude/config/binary.hpp"
