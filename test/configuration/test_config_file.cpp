@@ -557,7 +557,7 @@ SCENARIO("a member missing from the source is created or reported, as the policy
   }
 }
 
-SCENARIO("a store refuses to write over what this build cannot read", "[config][config_file]")
+SCENARIO("a store refuses to write over what a newer build wrote, and replaces anything else", "[config][config_file]")
 {
   GIVEN("a loaded file whose source is then replaced by a newer version")
   {
@@ -569,7 +569,7 @@ SCENARIO("a store refuses to write over what this build cannot read", "[config][
     };
     file.load();
 
-    WHEN("the newer value is the root, the member, a nested member, or a vector element")
+    WHEN("the newer value is the root, the member, a nested member, a vector element, or a member beside a typo")
     {
       const auto newer_root = std::string{"version = 2\nname = \"future\"\n"};
       const auto newer_member =
@@ -580,10 +580,14 @@ SCENARIO("a store refuses to write over what this build cannot read", "[config][
       const auto newer_element = std::string{"version = 1\nname = \"app\"\n[network]\nversion = 2\nhostname = \"now\"\n"
                                              "[network.inner]\nversion = 1\ndepth = 7\n"
                                              "[[network.extras]]\nversion = 2\ndepth = 8\n"};
+      // The root's own name is of the wrong type, which on its own would be
+      // replaced; the newer member beside it is what refuses the store.
+      const auto newer_beside_typo =
+        std::string{"version = 1\nname = 7\n[network]\nversion = 3\nhostname = \"future\"\n"};
 
-      THEN("each refusal is an invalid_version, and the source is untouched")
+      THEN("each refusal is an invalid_version naming the newer table, and the source is untouched")
       {
-        for(const auto& text : {newer_root, newer_member, newer_nested, newer_element})
+        for(const auto& text : {newer_root, newer_member, newer_nested, newer_element, newer_beside_typo})
         {
           store["app"] = arude::config::as_bytes(text);
           const auto before = store.at("app");
@@ -591,8 +595,9 @@ SCENARIO("a store refuses to write over what this build cannot read", "[config][
           const auto failure =
             config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
 
+          INFO(std::format("The message is: {}", failure.str()));
           REQUIRE(failure.data() == arude::config::config_error::invalid_version);
-          REQUIRE(failure.str().contains("refusing to store over what this build cannot read"));
+          REQUIRE(failure.str().contains("refusing to store over 'memory:app', which a newer build wrote"));
           REQUIRE(failure.str().contains("newer than version"));
           REQUIRE(store.at("app") == before);
         }
@@ -601,32 +606,37 @@ SCENARIO("a store refuses to write over what this build cannot read", "[config][
 
     WHEN("the source is TOML that does not read as the root type")
     {
-      const auto before =
+      store["app"] =
         arude::config::as_bytes(std::string{"version = 1\nname = \"app\"\n[network]\nversion = 2\nport = -1\n"});
-      store["app"] = before;
 
-      const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
+      file.store();
 
-      THEN("it is an invalid_payload, and the source is untouched")
+      THEN("it is replaced by the cached root, which loads back")
       {
-        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
-        REQUIRE(failure.str().contains("refusing to store over what this build cannot read"));
-        REQUIRE(store.at("app") == before);
+        auto second = arude::config::config_file<config_file_test::app, config_test::memory_transport>{
+          config_test::memory_transport{"app", store}
+        };
+        second.load();
+
+        REQUIRE(second.get().name == file.get().name);
+        REQUIRE(second.get().network.value().port == file.get().network.value().port);
       }
     }
 
     WHEN("the source is not valid TOML at all")
     {
-      const auto before = arude::config::as_bytes(std::string{"not toml {{{"});
-      store["app"] = before;
+      store["app"] = arude::config::as_bytes(std::string{"not toml {{{"});
 
-      const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
+      file.store();
 
-      THEN("it is an invalid_payload, and the source is untouched")
+      THEN("it is replaced by the cached root, which loads back")
       {
-        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
-        REQUIRE(failure.str().contains("refusing to store over 'memory:app', which is not valid TOML"));
-        REQUIRE(store.at("app") == before);
+        auto second = arude::config::config_file<config_file_test::app, config_test::memory_transport>{
+          config_test::memory_transport{"app", store}
+        };
+        second.load();
+
+        REQUIRE(second.get().name == file.get().name);
       }
     }
   }
@@ -634,35 +644,6 @@ SCENARIO("a store refuses to write over what this build cannot read", "[config][
 
 SCENARIO("overwrite() is the deliberate way past a refused store", "[config][config_file]")
 {
-  GIVEN("a loaded file whose source holds text that is not TOML")
-  {
-    auto store = config_test::memory_transport::store_t{};
-    store["app"] = arude::config::as_bytes(std::string{"not toml {{{"});
-
-    auto file = arude::config::config_file<config_file_test::app, config_test::memory_transport>{
-      config_test::memory_transport{"app", store}
-    };
-
-    auto value = config_file_test::app{};
-    value.name = "stored";
-    file.set(value);
-
-    WHEN("it is overwritten")
-    {
-      file.overwrite();
-
-      THEN("a second file over the same source loads the stored root back")
-      {
-        auto second = arude::config::config_file<config_file_test::app, config_test::memory_transport>{
-          config_test::memory_transport{"app", store}
-        };
-        second.load();
-
-        REQUIRE(second.get().name == "stored");
-      }
-    }
-  }
-
   GIVEN("a loaded file whose source holds a newer version")
   {
     auto store = config_test::memory_transport::store_t{};

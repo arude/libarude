@@ -202,15 +202,14 @@ public: // Methods
 
   ///
   /// Stores the cached root through the transport. With probe set, the
-  /// source is read first and the store refused where it does not read as
-  /// T; see the config_file::store() documentation for the reasons.
+  /// source is read first and the store refused where a newer build wrote
+  /// it; see the config_file::store() documentation.
   ///
-  /// \param probe Whether to read and refuse on the source first.
+  /// \param probe Whether to read the source first and refuse newer data.
   /// \param loc The call site a failure reports.
   /// \throws exception_t With read_only where the transport cannot be
-  ///         written, invalid_payload or invalid_version where the probe
-  ///         refuses, not_found where nothing is cached, or io_error where
-  ///         the transport fails.
+  ///         written, invalid_version where the probe refuses, not_found
+  ///         where nothing is cached, or io_error where the transport fails.
   ///
   auto store(bool probe, std::source_location loc) -> void;
 
@@ -441,56 +440,37 @@ auto file_state<T, Tr, F>::store(const bool probe, const std::source_location lo
 
   if(probe)
   {
-    auto source = [this, loc]() -> std::optional<toml::table>
-    {
-      try
-      {
-        return read_source(loc);
-      }
-      catch(const exception_t& ex)
-      {
-        if(ex.data() == config_error::invalid_payload)
-        {
-          // Only a parse failure has that code here: the source is not
-          // valid TOML, and the store says it is the one refusing.
-          throw exception_t{
-            std::format(
-              "arude::config: refusing to store over '{}', which is not valid TOML: {}",
-              carrier_.location(),
-              nested_message()),
-            config_error::invalid_payload,
-            loc};
-        }
+    // The source is read first so that newer data is not overwritten: a root
+    // or member a newer build wrote cannot be read back by this one, and
+    // writing over it would lose what that build stored. Anything else this
+    // build cannot read, a hand-edit that broke the TOML or a value of the
+    // wrong type, is replaced: the cached root is what is wanted there.
+    auto source = std::optional<toml::table>{};
 
+    try
+    {
+      source = read_source(loc);
+    }
+    catch(const exception_t& ex)
+    {
+      // Only a parse failure has that code here, and a source that is not
+      // TOML holds nothing a newer build could have written.
+      if(ex.data() != config_error::invalid_payload)
+      {
         throw;
       }
-    }();
+    }
 
     if(source.has_value())
     {
-      // The probe reads the source as a load(create | upgrade_to_current)
-      // would: leniently. A source this build cannot read is one a load
-      // fails on anyway, and store() refuses to write over it; a root or
-      // member newer than this build therefore refuses with invalid_version.
-      // Refusing on any unreadable source also closes a blind spot the
-      // minimum probe (versions only) would leave: reflect-cpp stops
-      // reading an array at its first bad element, so a newer versioned
-      // element after it would go unseen and be overwritten.
-      try
-      {
-        // The two flags are combined on the underlying type, which is what
-        // a bitmask is for.
-        // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
-        const auto lenient = static_cast<load_policy>(
-          std::to_underlying(load_policy::create) | std::to_underlying(load_policy::upgrade_to_current));
-
-        std::ignore = read_root<T>(*source, lenient, toml_format{}, carrier_.location(), loc);
-      }
-      catch(const exception_t& ex)
+      if(const auto newer = newer_in<T>(*source); newer.has_value())
       {
         throw exception_t{
-          std::format("arude::config: refusing to store over what this build cannot read: {}", nested_message()),
-          ex.data(),
+          std::format(
+            "arude::config: refusing to store over '{}', which a newer build wrote: {}",
+            carrier_.location(),
+            newer.value()),
+          config_error::invalid_version,
           loc};
       }
     }
@@ -678,9 +658,10 @@ namespace arude::config
 /// load(policy) reads, parses and migrates outside any lock and swaps the
 /// result in under one lock, all or nothing; a load that fails changes
 /// nothing, and a load never writes. store() probes the source first and
-/// refuses with invalid_version over a file written by a newer build, and
-/// with invalid_payload over one that is not valid TOML or does not read as
-/// T; overwrite() is the deliberate way past both. Stores are serialised,
+/// refuses with invalid_version over a file a newer build wrote, root or any
+/// versioned member, so that build's data is not lost; a source this build
+/// cannot otherwise read, not TOML or not a T, is replaced. overwrite() is
+/// the deliberate way past the refusal. Stores are serialised,
 /// so the newest snapshot is written last. get() and set() never wait for
 /// I/O.
 ///
@@ -846,15 +827,15 @@ public: // Methods
   ///
   /// \param loc The call site a failure reports. Left to its default.
   /// \throws exception_t With read_only where the transport cannot be
-  ///         written, invalid_version or invalid_payload where the probe
-  ///         refuses, not_found where nothing is cached, or io_error where
-  ///         the transport fails.
+  ///         written, invalid_version where the source holds data a newer
+  ///         build wrote, not_found where nothing is cached, or io_error
+  ///         where the transport fails.
   ///
   auto store(std::source_location loc = std::source_location::current()) -> void;
 
   ///
   /// Stores the cached root without probing the source first: the
-  /// deliberate way past a store() refusal.
+  /// deliberate way past store()'s refusal to write over newer data.
   ///
   /// \param loc The call site a failure reports. Left to its default.
   /// \throws exception_t As store() does, less the probe's refusals.

@@ -394,7 +394,7 @@ SCENARIO("a store refused by the probe is reported where store() was called", "[
       THEN("it is an invalid_version raised at the store(), naming the version found")
       {
         REQUIRE(failure.data() == arude::config::config_error::invalid_version);
-        REQUIRE(failure.str().contains("refusing to store over what this build cannot read"));
+        REQUIRE(failure.str().contains("which a newer build wrote"));
         REQUIRE(failure.str().contains("version 99"));
         REQUIRE(call_site_test::raised_at(failure, call));
         REQUIRE(call_site_test::reads_as_one_failure(failure));

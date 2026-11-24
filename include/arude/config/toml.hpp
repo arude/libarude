@@ -23,6 +23,7 @@
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
 #include "arude/config/toml_parsers.hpp"
+#include "arude/config/toml_reader.hpp"
 #include "arude/config/toml_time.hpp"
 #include "arude/config/versioned.hpp"
 #include "arude/type_name.hpp"
@@ -34,9 +35,11 @@
 #include <toml++/toml.hpp>
 
 #include <concepts>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -122,6 +125,23 @@ template<configuration_c T>
   const toml_format& format,
   std::string_view source,
   std::source_location loc) -> T;
+
+///
+/// Returns the first version newer than this build that a document declares,
+/// read as a load(create | upgrade_to_current) would and whatever becomes of
+/// that read. What store() asks before writing over a source: a source it
+/// cannot otherwise read is replaced, but newer data is not. reflect-cpp
+/// keeps reading a struct's other fields after one fails, so a newer member
+/// is found beside a typo; it stops reading an array at its first bad
+/// element, so a newer element after one in the same array is not.
+///
+/// \tparam T The root's configuration type.
+/// \param document The table. Retained by the read, not after it.
+/// \return The message naming the newer table and both versions, or
+///         std::nullopt where the document declares none.
+///
+template<configuration_c T>
+[[nodiscard]] auto newer_in(toml::table& document) -> std::optional<std::string>;
 
 ///
 /// Writes a configuration as a table, stamped with T's version.
@@ -228,6 +248,26 @@ auto read_root(
   }
 
   return std::move(parsed.value().value());
+}
+
+///
+///
+template<configuration_c T>
+auto newer_in(toml::table& document) -> std::optional<std::string>
+{
+  // The two flags are combined on the underlying type, which is what a
+  // bitmask is for.
+  // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+  const auto lenient = static_cast<load_policy>(
+    std::to_underlying(load_policy::create) | std::to_underlying(load_policy::upgrade_to_current));
+
+  auto context = read_context{lenient};
+
+  // Whether the read succeeds does not matter: a newer version is recorded
+  // where it is met, before reflect-cpp decides what to make of the rest.
+  std::ignore = parse_root<T, rfl::DefaultIfMissing>(document, context);
+
+  return context.newer();
 }
 
 ///

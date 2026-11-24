@@ -31,6 +31,7 @@
 #include <expected>
 #include <format>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -88,6 +89,22 @@ public: // Methods
   ///
   [[nodiscard]] auto code_for(std::string_view final_error) const -> config_error;
 
+  ///
+  /// Records that a table declares a version newer than this build knows.
+  /// Kept apart from fail(), because it is asked of a read whatever became of
+  /// it: store() refuses to write over newer data even where the rest of the
+  /// source does not read. Only the first one is kept.
+  ///
+  /// \param message The message naming the table and both versions.
+  ///
+  auto note_newer(std::string message) -> void;
+
+  ///
+  /// Returns the message of the first newer version recorded, if any.
+  /// \return The message, or std::nullopt where none was seen.
+  ///
+  [[nodiscard]] auto newer() const -> const std::optional<std::string>&;
+
 private: // Types
   ///
   /// One recorded failure: its code and the message that names it.
@@ -116,6 +133,11 @@ private: // Variables
   /// Failures recorded so far, in the order they were recorded.
   ///
   std::vector<failure> failures_;
+
+  ///
+  /// The first newer version seen, by its message.
+  ///
+  std::optional<std::string> newer_;
 };
 
 ///

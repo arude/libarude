@@ -67,8 +67,9 @@ version = 1
   `load_policy::create` is given, in which case it takes the struct's default.
 - **What a store keeps.** The file is written from the struct, so keys and
   tables the struct does not declare, and comments, are not kept. `store()`
-  refuses to write over a file this build cannot read, or one a newer build
-  wrote; `overwrite()` does so on purpose.
+  refuses to write over data a newer build wrote, root or member, and replaces
+  anything else this build cannot read, a broken hand-edit included;
+  `overwrite()` writes over newer data on purpose.
 - **Dates and times.** TOML's four date and time types read and write as
   `std::chrono::sys_time`, `local_time`, `year_month_day` and `hh_mm_ss`.
 - **Transports.** `transport_file`, and `transport_https` with

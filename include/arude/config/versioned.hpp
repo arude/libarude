@@ -611,8 +611,10 @@ auto read_versioned(const toml_reader& reader, toml::node* const node) -> rfl::R
 
   if(version > T::config_version)
   {
-    return rfl::error(
-      reader.context().fail(config_error::invalid_version, newer_message(type_name<T>(), version, T::config_version)));
+    auto message = newer_message(type_name<T>(), version, T::config_version);
+    reader.context().note_newer(message);
+
+    return rfl::error(reader.context().fail(config_error::invalid_version, std::move(message)));
   }
 
   if(version == T::config_version)

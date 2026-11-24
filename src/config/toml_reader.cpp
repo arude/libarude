@@ -12,6 +12,7 @@
 #include <toml++/toml.hpp>
 
 #include <expected>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -56,6 +57,23 @@ auto read_context::code_for(const std::string_view final_error) const -> config_
   }
 
   return config_error::invalid_payload;
+}
+
+///
+///
+auto read_context::note_newer(std::string message) -> void
+{
+  if(!newer_.has_value())
+  {
+    newer_ = std::move(message);
+  }
+}
+
+///
+///
+auto read_context::newer() const -> const std::optional<std::string>&
+{
+  return newer_;
 }
 
 ///
