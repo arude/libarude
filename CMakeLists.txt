@@ -99,10 +99,10 @@ if(NOT ARUDE_NO_CONFIG)
   # generate step fails on a target that does not exist. find_package is guarded
   # with "if(NOT TARGET tomlplusplus)", which is the hook for a parent project
   # to bring its own — so this has to be added before reflect-cpp, not after.
-  # The version is what reflect-cpp 0.19.0 asks for in its vcpkg manifest.
+  # The version is what reflect-cpp 0.23.0 asks for in its vcpkg manifest.
   CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")
 
-  CPMAddPackage("gh:getml/reflect-cpp@0.19.0")
+  CPMAddPackage("gh:getml/reflect-cpp@0.23.0")
 
   # Built at our standard for the same reason Catch2 is; see the comment there.
   #

@@ -63,8 +63,11 @@ version = 1
   names the old one as `previous_t`, and an `upgrade()` from the old one; see
   `arude/config/migration.hpp`. `load()` migrates an older file, and refuses
   one written by a newer build.
-- **Missing parts.** A missing file, member or field is an error, unless
-  `load_policy::create` is given, in which case it takes the struct's default.
+- **Missing parts.** Every field is required, unless it is a `std::optional`,
+  which reads as `std::nullopt` when it is missing — even where the member has
+  an initialiser. A missing file is an error too, unless `load_policy::create`
+  is given, in which case the root is the struct's default. `create` does
+  nothing for a file that is there.
 - **What a store keeps.** The file is written from the struct, so keys and
   tables the struct does not declare, and comments, are not kept. `store()`
   refuses to write over data a newer build wrote, root or member, and replaces
@@ -77,19 +80,18 @@ version = 1
 
 ### reflect-cpp
 
-The struct conversion is reflect-cpp's, pinned at 0.19.0 with toml++ 3.4.0 in
+The struct conversion is reflect-cpp's, pinned at 0.23.0 with toml++ 3.4.0 in
 `CMakeLists.txt`. libarude builds on more than its public API: it specialises
 `rfl::parsing::Parser` for `versioned<>`, enumerations, durations, and dates and
 times; replaces the internal `rfl::parsing::MapReader`; derives its TOML reader
-and writer from reflect-cpp's; and names `rfl::internal` in a few places. Those
-are reflect-cpp's implementation, so treat a reflect-cpp upgrade as a change of
-its own: bump the version and run the whole suite, the
-`test/configuration/test_toml_*` files above all.
+and writer from reflect-cpp's; and names `rfl::internal`, and the enchantum copy
+reflect-cpp bundles, in a few places. Those are reflect-cpp's implementation, so
+treat a reflect-cpp upgrade as a change of its own: bump the version and run the
+whole suite, the `test/configuration/test_toml_*` files above all.
 
-Two of its limits show through. A non-flag enumeration whose underlying type is
-not `int` needs `rfl::config::enum_range` specialised for it, and a
-`std::variant` alternative cannot hold a `versioned<>` member, as reflect-cpp
-takes the first alternative that parses; both are compile errors that say so.
+One of its limits shows through: a `std::variant` alternative cannot hold a
+`versioned<>` member, as reflect-cpp takes the first alternative that parses,
+and that is a compile error that says so.
 
 ## Building
 

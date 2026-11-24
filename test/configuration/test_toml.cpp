@@ -193,10 +193,9 @@ struct web
 };
 
 ///
-/// A colour, written by name. Of the default underlying type: reflect-cpp
-/// cannot list the names of an enumeration with a narrower one.
+/// A colour, written by name.
 ///
-enum class colour // NOLINT(performance-enum-size)
+enum class colour : std::uint8_t
 {
   red,
   green

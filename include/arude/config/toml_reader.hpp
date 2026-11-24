@@ -57,8 +57,9 @@ public: // Structors
   ///
   /// Constructs a context for one read.
   /// \param policy The load policy the read runs under.
+  /// \param probing Whether the read is newer_in()'s probe; see probing().
   ///
-  explicit read_context(load_policy policy);
+  explicit read_context(load_policy policy, bool probing = false);
 
 public: // Accessors
   ///
@@ -66,6 +67,15 @@ public: // Accessors
   /// \return The policy.
   ///
   [[nodiscard]] auto policy() const -> load_policy;
+
+  ///
+  /// Returns whether the read is newer_in()'s probe. The probe reads a
+  /// versioned table that declares no version as its newest type anyway,
+  /// result discarded, so a newer member inside it is still recorded
+  /// through note_newer().
+  /// \return true for the probe.
+  ///
+  [[nodiscard]] auto probing() const -> bool;
 
 public: // Methods
   ///
@@ -128,6 +138,11 @@ private: // Variables
   /// The policy the read runs under.
   ///
   load_policy policy_;
+
+  ///
+  /// Whether the read is newer_in()'s probe.
+  ///
+  bool probing_ = false;
 
   ///
   /// Failures recorded so far, in the order they were recorded.

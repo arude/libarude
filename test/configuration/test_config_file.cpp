@@ -188,7 +188,7 @@ constexpr auto network_block = std::string_view{"[network]\nversion = 2\nhostnam
 ///
 /// A flag enum, whose value reflect-cpp writes as '|'-separated names.
 ///
-enum class flags // NOLINT(performance-enum-size): reflect-cpp cannot list the names of a narrower enumeration.
+enum class flags // NOLINT(performance-enum-size): kept signed, so a negative flag value stays negative.
 {
   ///
   /// The first flag.
@@ -202,7 +202,7 @@ enum class flags // NOLINT(performance-enum-size): reflect-cpp cannot list the n
 };
 
 ///
-/// Combines two flags, as rfl's is_flag_enum concept requires.
+/// Combines two flags, which is what makes reflect-cpp treat the enum as flags.
 /// \param left One flag.
 /// \param right Another.
 /// \return The two flags together.
@@ -231,6 +231,132 @@ struct flaggy
   /// A flag field.
   ///
   flags mode = flags::a;
+};
+
+///
+/// A root whose members may be missing from the source.
+///
+struct optionals
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// A required field.
+  ///
+  std::string name = "optionals";
+
+  ///
+  /// An optional field with an initialiser, which a missing key does not
+  /// restore.
+  ///
+  std::optional<std::int32_t> timeout = 30;
+
+  ///
+  /// An optional field without one.
+  ///
+  std::optional<std::string> label;
+};
+
+///
+/// Version 1 of a member that holds a nested versioned member, so an older
+/// table can hold a newer one.
+///
+struct layer_v1
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// A nested versioned member.
+  ///
+  arude::config::versioned<inner_v1> inner;
+};
+
+///
+/// Version 2 of the layered member, adding a field beside the nested one.
+///
+struct layer_v2
+{
+  ///
+  /// The version before this one.
+  ///
+  using previous_t = layer_v1;
+
+  ///
+  /// \see layer_v1::config_version
+  ///
+  static constexpr auto config_version = arude::config::version_t{2};
+
+  ///
+  /// \see layer_v1::version
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// A nested versioned member.
+  ///
+  arude::config::versioned<inner_v1> inner;
+
+  ///
+  /// A weight, which version 1 lacks.
+  ///
+  std::int32_t weight = 1;
+};
+
+///
+/// Upgrades a layer from version 1 to version 2.
+/// \param val The version 1 layer. Not retained.
+/// \return The same layer as version 2.
+///
+[[nodiscard]] auto upgrade(const layer_v1& val) -> layer_v2
+{
+  return layer_v2{.inner = val.inner};
+}
+
+///
+/// Downgrades a layer from version 2 to version 1.
+/// \param val The version 2 layer. Not retained.
+/// \return The same layer as version 1.
+///
+[[nodiscard]] auto downgrade(const layer_v2& val) -> layer_v1
+{
+  return layer_v1{.inner = val.inner};
+}
+
+///
+/// A root holding the layered member.
+///
+struct layered
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// The layered member, carrying its own version.
+  ///
+  arude::config::versioned<layer_v2> layer;
 };
 
 ///
@@ -519,7 +645,8 @@ SCENARIO("reading a file that was never loaded is a not_found", "[config][config
   }
 }
 
-SCENARIO("a member missing from the source is created or reported, as the policy says", "[config][config_file]")
+SCENARIO(
+  "a member or field missing from the source is an invalid_payload, whatever the policy", "[config][config_file]")
 {
   GIVEN("a store whose document has no network table, and a file over it")
   {
@@ -531,19 +658,6 @@ SCENARIO("a member missing from the source is created or reported, as the policy
       config_test::memory_transport{"app", store}
     };
 
-    WHEN("it is loaded with create")
-    {
-      using arude::bitwise_operators::operator|;
-
-      file.load(arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current);
-
-      THEN("the member takes the root's initialiser for it")
-      {
-        REQUIRE(file.get().network.value().hostname == "v2-host");
-        REQUIRE(file.get().extra.value().depth == 3);
-      }
-    }
-
     WHEN("it is loaded without create")
     {
       const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.load(); });
@@ -552,6 +666,103 @@ SCENARIO("a member missing from the source is created or reported, as the policy
       {
         REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
         REQUIRE(failure.str().contains("'network'"));
+      }
+    }
+
+    WHEN("it is loaded with create")
+    {
+      using arude::bitwise_operators::operator|;
+
+      const auto policy = arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current;
+
+      const auto failure =
+        config_file_test::failure_of<arude::config::exception_t>([&file, policy] -> void { file.load(policy); });
+
+      THEN("create does not fill the member in: the source is there, so it is the same invalid_payload")
+      {
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("'network'"));
+        REQUIRE(!file.loaded());
+      }
+    }
+  }
+
+  GIVEN("a store whose network table lacks its port, and a file over it")
+  {
+    auto store = config_test::memory_transport::store_t{};
+    store["app"] = arude::config::as_bytes(
+      std::string{"version = 1\nname = \"sparse\"\n"
+                  "[network]\nversion = 2\nhostname = \"source-host\"\n"
+                  "[network.inner]\nversion = 1\ndepth = 7\n"
+                  "[[network.extras]]\nversion = 1\ndepth = 7\n"
+                  "[extra]\nversion = 1\ndepth = 3\n"});
+
+    auto file = arude::config::config_file<config_file_test::app, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
+
+    WHEN("it is loaded with create")
+    {
+      using arude::bitwise_operators::operator|;
+
+      const auto policy = arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current;
+
+      const auto failure =
+        config_file_test::failure_of<arude::config::exception_t>([&file, policy] -> void { file.load(policy); });
+
+      THEN("it is an invalid_payload naming the missing field, which takes no default")
+      {
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("'port'"));
+        REQUIRE(!file.loaded());
+      }
+    }
+  }
+}
+
+SCENARIO("a missing std::optional member reads as std::nullopt", "[config][config_file]")
+{
+  GIVEN("a source that holds neither of two optional members, one of them with an initialiser")
+  {
+    auto store = config_test::memory_transport::store_t{};
+    store["app"] = arude::config::as_bytes(std::string{"version = 1\nname = \"bare\"\n"});
+
+    auto file = arude::config::config_file<config_file_test::optionals, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
+
+    WHEN("it is loaded")
+    {
+      file.load();
+
+      THEN("both are std::nullopt: the initialiser of a missing optional is not what it reads as")
+      {
+        REQUIRE(config_file_test::optionals{}.timeout == 30);
+        REQUIRE_FALSE(file.get().timeout.has_value());
+        REQUIRE_FALSE(file.get().label.has_value());
+        REQUIRE(file.get().name == "bare");
+      }
+    }
+  }
+
+  GIVEN("a source that holds both")
+  {
+    auto store = config_test::memory_transport::store_t{};
+    store["app"] =
+      arude::config::as_bytes(std::string{"version = 1\nname = \"full\"\ntimeout = 5\nlabel = \"named\"\n"});
+
+    auto file = arude::config::config_file<config_file_test::optionals, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
+
+    WHEN("it is loaded")
+    {
+      file.load();
+
+      THEN("each holds what the source held")
+      {
+        REQUIRE(file.get().timeout == 5);
+        REQUIRE(file.get().label == "named");
       }
     }
   }
@@ -604,6 +815,50 @@ SCENARIO("a store refuses to write over what a newer build wrote, and replaces a
       }
     }
 
+    WHEN("the newer value is a nested member inside a member table that declares no version")
+    {
+      // The network table lacks its version key, so it does not read; the
+      // probe still reads it for what it holds, and finds the newer inner.
+      store["app"] = arude::config::as_bytes(
+        std::string{"version = 1\nname = \"app\"\n[network]\nhostname = \"now\"\nport = 80\n"
+                    "[network.inner]\nversion = 2\ndepth = 8\n"
+                    "[[network.extras]]\nversion = 1\ndepth = 7\n"});
+      const auto before = store.at("app");
+
+      const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
+
+      THEN("the store is refused as an invalid_version, and the source is untouched")
+      {
+        REQUIRE(failure.data() == arude::config::config_error::invalid_version);
+        REQUIRE(failure.str().contains("inner_v1 is version 2, newer than version 1"));
+        REQUIRE(store.at("app") == before);
+      }
+    }
+
+    WHEN("the newer value is an array element after one that lacks a field")
+    {
+      // The probe stops reading an array at its first element that does not
+      // read, and an element missing a required field is one: the newer
+      // element after it is not seen, so the source is replaced.
+      store["app"] = arude::config::as_bytes(
+        std::string{"version = 1\nname = \"app\"\n[network]\nversion = 2\nhostname = \"now\"\nport = 80\n"
+                    "[network.inner]\nversion = 1\ndepth = 7\n"
+                    "[[network.extras]]\nversion = 1\n"
+                    "[[network.extras]]\nversion = 2\ndepth = 8\n"});
+
+      file.store();
+
+      THEN("the store goes through, and the cached root loads back")
+      {
+        auto second = arude::config::config_file<config_file_test::app, config_test::memory_transport>{
+          config_test::memory_transport{"app", store}
+        };
+        second.load();
+
+        REQUIRE(second.get().name == file.get().name);
+      }
+    }
+
     WHEN("the source is TOML that does not read as the root type")
     {
       store["app"] =
@@ -637,6 +892,38 @@ SCENARIO("a store refuses to write over what a newer build wrote, and replaces a
         second.load();
 
         REQUIRE(second.get().name == file.get().name);
+      }
+    }
+  }
+}
+
+SCENARIO("a store probe reaches into a member table of an older version", "[config][config_file]")
+{
+  GIVEN("a loaded file whose source then holds an older member holding a newer nested member")
+  {
+    auto store = config_test::memory_transport::store_t{};
+    store["layered"] = arude::config::as_bytes(
+      std::string{"version = 1\n[layer]\nversion = 2\nweight = 1\n[layer.inner]\nversion = 1\ndepth = 7\n"});
+
+    auto file = arude::config::config_file<config_file_test::layered, config_test::memory_transport>{
+      config_test::memory_transport{"layered", store}
+    };
+    file.load();
+
+    store["layered"] = arude::config::as_bytes(
+      std::string{"version = 1\n[layer]\nversion = 1\n[layer.inner]\nversion = 2\ndepth = 8\n"});
+    const auto before = store.at("layered");
+
+    WHEN("it is stored")
+    {
+      const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
+
+      THEN("the newer nested member is found, the store is refused, and the source is untouched")
+      {
+        INFO(std::format("The message is: {}", failure.str()));
+        REQUIRE(failure.data() == arude::config::config_error::invalid_version);
+        REQUIRE(failure.str().contains("inner_v1 is version 2, newer than version 1"));
+        REQUIRE(store.at("layered") == before);
       }
     }
   }

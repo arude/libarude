@@ -6,8 +6,8 @@
 /// libarude is dual licensed. See LICENSE for the AGPLv3 terms, and
 /// LICENSING.md for the alternative MIT license available by arrangement.
 ///
-/// What load() should do about a source or a member that is missing, or of
-/// another version.
+/// What load() should do about a source that is missing, or a source or
+/// member of another version.
 ///
 #pragma once
 
@@ -19,8 +19,8 @@ namespace arude::config
 {
 
 ///
-/// What load() should do about a source or a member that is missing, or of
-/// another version.
+/// What load() should do about a source that is missing, or a source or
+/// member of another version.
 /// A bitmask, so the flags combine through the magic_enum bitwise operators
 /// that arude/enum.hpp re-exports as arude::bitwise_operators; is_set() is
 /// what reads one back out.
@@ -28,6 +28,14 @@ namespace arude::config
 /// A member's version must match the one its type declares unless
 /// upgrade_to_current is given; without it, an older member is an
 /// invalid_version, as is a newer one whatever the policy says.
+///
+/// No flag lets a field be missing from a source that is there. Every field
+/// is required, and its absence is an invalid_payload naming it, unless its
+/// type is one reflect-cpp itself reads as optional: std::optional, or
+/// std::shared_ptr. Such a field reads as empty, which for std::optional is
+/// std::nullopt even where the member has an initialiser. reflect-cpp reads
+/// std::unique_ptr that way too, but a configuration is copied, so it cannot
+/// hold one. A versioned table must carry its `version` key.
 ///
 enum class load_policy : std::uint8_t
 {
@@ -38,28 +46,10 @@ enum class load_policy : std::uint8_t
   none = 0x00,
 
   ///
-  /// What is missing takes its defaults rather than being an error. That
-  /// covers a source that is not there, which leaves the root at `T{}`, and
-  /// equally a member or field that is not in a source that is there, which
-  /// takes a default: reflect-cpp's rfl::DefaultIfMissing. Without this flag
-  /// a source that is not there is a not_found, and a missing field is an
-  /// invalid_payload.
-  ///
-  /// Where the source is there, a struct is read by starting from its own
-  /// type's `{}` and replacing what the file holds. So:
-  ///
-  /// - a member whose table is missing entirely takes the root's initialiser
-  ///   for that member;
-  /// - a member whose table is present but lacks a field takes that field's
-  ///   initialiser in the member's own type, not the value the root's
-  ///   initialiser gives it;
-  /// - a versioned table without a `version` key is read as the newest
-  ///   version;
-  /// - an older table's missing fields take the older type's defaults, and
-  ///   are then migrated.
-  ///
-  /// A type used under `create` must be default-constructible all the way
-  /// down. One with no initialiser is value-initialised.
+  /// A source that is not there at all leaves the root at `T{}`, its default
+  /// member initialisers, rather than being a not_found. That is all it does:
+  /// a source that is there is read exactly as without the flag, so a field
+  /// missing from it is still an invalid_payload.
   ///
   /// Nothing is written: load() never touches the medium, so what was created
   /// reaches the source only when the application calls store(), and a

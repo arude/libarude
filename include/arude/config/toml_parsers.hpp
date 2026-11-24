@@ -14,8 +14,12 @@
 /// Both replace reflect-cpp internals rather than hiding a reader member, so
 /// a reflect-cpp bump has to rerun the reader's tests. MapReader's
 /// constructor and read() are what MapParser calls, and the enum Parser
-/// replaces StringConverter's fallback that turns a numeric string into an
-/// enumerator.
+/// replaces rfl::string_to_enum's fallback that turns a numeric string into
+/// an enumerator. A flag enum is told apart by enchantum::is_bitflag, the
+/// trait of the enchantum copy reflect-cpp bundles, which is what
+/// rfl::enum_to_string asks too. A flag enum is also spelled here rather than
+/// by rfl::enum_to_string, which never finishes on a signed value whose sign
+/// bit is set.
 ///
 #pragma once
 
@@ -25,9 +29,9 @@
 
 #include <rfl/always_false.hpp>
 #include <rfl/enums.hpp>
-#include <rfl/internal/enums/StringConverter.hpp>
 #include <rfl/internal/has_reflection_type_v.hpp>
 #include <rfl/Result.hpp>
+#include <rfl/thirdparty/enchantum/bitflags.hpp>
 // Parser.hpp, not MapReader.hpp alone: it brings the primary MapReader after
 // the primary Parser, which MapReader's definition names.
 #include <rfl/parsing/Parent.hpp>
@@ -179,7 +183,7 @@ auto enumerator_named(const std::string_view name) -> std::expected<E, std::stri
     return std::nullopt;
   };
 
-  if constexpr(rfl::internal::enums::is_flag_enum<E>)
+  if constexpr(enchantum::is_bitflag<E>)
   {
     auto value = std::underlying_type_t<E>{0};
 
@@ -501,10 +505,9 @@ template<typename P>
 auto Parser<arude::config::detail::toml_reader, arude::config::detail::toml_writer, E, ProcessorsType>::write(
   const arude::config::detail::toml_writer& writer, const E& val, const P& parent) noexcept -> void
 {
-  // A flag enum's converter shifts the value right until it is zero, so a
-  // negative value, or one with bits outside the known flags, is checked
-  // before the converter ever sees it: it would not terminate on one.
-  if constexpr(rfl::internal::enums::is_flag_enum<E>)
+  // A value with bits outside the known flags names no enumerator, so it is
+  // refused here, with the value it holds, before it is spelled.
+  if constexpr(enchantum::is_bitflag<E>)
   {
     using underlying_t = std::underlying_type_t<E>;
 
@@ -566,16 +569,57 @@ template<typename E, typename ProcessorsType>
 auto Parser<arude::config::detail::toml_reader, arude::config::detail::toml_writer, E, ProcessorsType>::name_of(
   const E& val) -> std::string
 {
-  return internal::enums::StringConverter<E>::enum_to_string(val);
+  if constexpr(enchantum::is_bitflag<E>)
+  {
+    // Spelled here rather than by rfl::enum_to_string, which shifts the signed
+    // value right until it is zero: with the sign bit set, as a flag of its own
+    // in a signed enum, that never happens. The bits are walked unsigned.
+    using underlying_t = std::underlying_type_t<E>;
+    using bits_t = std::make_unsigned_t<underlying_t>;
+
+    const auto spelled = [](const bits_t bit) -> std::string
+    {
+      const auto flag = static_cast<E>(static_cast<underlying_t>(bit));
+
+      for(const auto& [known_name, enumerator] : rfl::get_enumerator_array<E>())
+      {
+        if(enumerator == flag)
+        {
+          return std::string{known_name};
+        }
+      }
+
+      return std::to_string(bit);
+    };
+
+    auto text = std::string{};
+    auto remaining = static_cast<bits_t>(std::to_underlying(val));
+
+    for(auto bit = bits_t{1}; remaining != bits_t{0}; bit = static_cast<bits_t>(bit << 1U))
+    {
+      if((remaining & bit) != bits_t{0})
+      {
+        text += text.empty() ? "" : "|";
+        text += spelled(bit);
+        remaining = static_cast<bits_t>(remaining & static_cast<bits_t>(~bit));
+      }
+    }
+
+    return text;
+  }
+  else
+  {
+    return rfl::enum_to_string(val);
+  }
 }
 
 ///
 /// Reads and writes a std::chrono::duration as the table reflect-cpp writes
 /// today: `{ count = <int>, unit = '<name>' }`. Replaces reflect-cpp's own
-/// duration parser, which cannot build under rfl::DefaultIfMissing because
-/// its unit literal has no default constructor; this one holds the unit as a
-/// plain string, and refuses a unit name or a count the target duration
-/// cannot hold without loss, which the replaced parser silently truncates.
+/// duration parser, which converts with std::chrono::duration_cast and so
+/// silently truncates a count the target duration cannot hold, such as
+/// 1500 milliseconds read as seconds; this one refuses that, and a unit name
+/// it does not know.
 ///
 /// \tparam Rep The duration's representation.
 /// \tparam Period The duration's period.
@@ -634,9 +678,8 @@ public: // Methods
 
 private: // Types
   ///
-  /// The table the duration is held in. The unit is a plain string, which
-  /// is what keeps the type default-constructible under
-  /// rfl::DefaultIfMissing.
+  /// The table the duration is held in. The unit is a plain string, so an
+  /// unknown one is refused by to_duration() with a message naming it.
   ///
   struct table_t
   {

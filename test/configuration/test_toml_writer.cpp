@@ -16,6 +16,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <map>
 #include <optional>
@@ -25,6 +26,7 @@
 #include <string_view>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace toml_writer_test
@@ -35,7 +37,7 @@ namespace
 ///
 /// A colour, which reflect-cpp writes by name.
 ///
-enum class colour // NOLINT(performance-enum-size): reflect-cpp 0.19.0 needs enum_range for a non-int enum.
+enum class colour // NOLINT(performance-enum-size): kept on int, so 300 is a value it can hold.
 {
   ///
   /// Red.
@@ -65,7 +67,7 @@ enum class flags // NOLINT(performance-enum-size): kept signed, so a negative fl
 };
 
 ///
-/// Combines two flags, as rfl's is_flag_enum concept requires.
+/// Combines two flags, which is what makes reflect-cpp treat the enum as flags.
 /// \param left One flag.
 /// \param right Another.
 /// \return The two flags together.
@@ -73,6 +75,38 @@ enum class flags // NOLINT(performance-enum-size): kept signed, so a negative fl
 constexpr auto operator|(flags left, flags right) -> flags
 {
   return static_cast<flags>(std::to_underlying(left) | std::to_underlying(right));
+}
+
+///
+/// A signed flag enum whose top flag is the sign bit.
+///
+enum class signed_flags : std::int8_t
+{
+  ///
+  /// The first flag.
+  ///
+  a = 1,
+
+  ///
+  /// The second flag.
+  ///
+  b = 2,
+
+  ///
+  /// The sign bit, as a flag of its own.
+  ///
+  top = std::numeric_limits<std::int8_t>::min()
+};
+
+///
+/// Combines two signed flags, which makes reflect-cpp treat the enum as flags.
+/// \param left One flag.
+/// \param right Another.
+/// \return The two flags together.
+///
+constexpr auto operator|(signed_flags left, signed_flags right) -> signed_flags
+{
+  return static_cast<signed_flags>(std::to_underlying(left) | std::to_underlying(right));
 }
 
 ///
@@ -142,6 +176,11 @@ struct writer_config
   flags mode = flags::a;
 
   ///
+  /// A signed flag field.
+  ///
+  signed_flags marks = signed_flags::a;
+
+  ///
   /// A text field.
   ///
   std::string text = "plain";
@@ -165,7 +204,37 @@ struct writer_config
   /// A string-keyed map of arrays, whose keys may hold dots.
   ///
   std::map<std::string, std::vector<std::int32_t>> arrays;
+
+  ///
+  /// A choice between a number and numbers, which can be left valueless. The
+  /// numbers are a std::deque because libstdc++ keeps a variant holding a
+  /// std::vector from ever becoming valueless.
+  ///
+  std::variant<std::int32_t, std::deque<std::int32_t>> choice;
 };
+
+///
+/// Converts to a std::deque by throwing, so that a variant emplacing a
+/// std::deque from it is left valueless the same way on every standard
+/// library.
+///
+class failing_deque final
+{
+public:
+  ///
+  /// Throws instead of converting.
+  /// \return Never returns.
+  /// \throws std::runtime_error Always.
+  ///
+  explicit operator std::deque<std::int32_t>() const;
+};
+
+///
+///
+failing_deque::operator std::deque<std::int32_t>() const
+{
+  throw std::runtime_error{"The conversion fails by design."};
+}
 
 ///
 /// Renders a configuration, or throws what write_root throws.
@@ -322,6 +391,29 @@ SCENARIO("an enum value naming no enumerator is refused rather than written as a
   }
 }
 
+SCENARIO("a variant left valueless by an exception is refused rather than terminating", "[config][toml_writer]")
+{
+  GIVEN("a configuration whose variant lost its value to a throwing emplace")
+  {
+    auto value = toml_writer_test::writer_config{};
+
+    REQUIRE_THROWS_AS(
+      value.choice.emplace<std::deque<std::int32_t>>(toml_writer_test::failing_deque{}), std::runtime_error);
+    REQUIRE(value.choice.valueless_by_exception());
+
+    WHEN("it is written")
+    {
+      const auto failure = toml_writer_test::failure_of<arude::config::exception_t>(
+        [&value] -> void { std::ignore = toml_writer_test::render(value); });
+
+      THEN("it is an invalid_payload, and the process carries on")
+      {
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+      }
+    }
+  }
+}
+
 SCENARIO("a key holding dots survives a write", "[config][toml_writer]")
 {
   GIVEN("a configuration whose maps hold keys with dots, as a value, a table and an array")
@@ -337,11 +429,9 @@ SCENARIO("a key holding dots survives a write", "[config][toml_writer]")
 
       auto document = arude::config::detail::parse_toml(text, "<text>", std::source_location::current());
 
-      using arude::bitwise_operators::operator|;
-
       const auto loaded = arude::config::detail::read_root<toml_writer_test::writer_config>(
         document,
-        arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current,
+        arude::config::load_policy::upgrade_to_current,
         arude::config::toml_format{},
         "<text>",
         std::source_location::current());
@@ -373,6 +463,35 @@ SCENARIO("a flag enum with a negative value is refused rather than hung on", "[c
       {
         REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
         REQUIRE(failure.str().contains("'mode' holds -2, which names no enumerator of toml_writer_test::"));
+      }
+    }
+  }
+}
+
+SCENARIO("a signed flag enum whose sign bit is a flag is written and read back", "[config][toml_writer]")
+{
+  GIVEN("a configuration whose signed flags hold the sign bit and another flag")
+  {
+    auto value = toml_writer_test::writer_config{};
+    value.marks = toml_writer_test::signed_flags::a | toml_writer_test::signed_flags::top;
+
+    WHEN("it is written and read back")
+    {
+      const auto text = toml_writer_test::render(value);
+
+      auto document = arude::config::detail::parse_toml(text, "<text>", std::source_location::current());
+
+      const auto loaded = arude::config::detail::read_root<toml_writer_test::writer_config>(
+        document,
+        arude::config::load_policy::none,
+        arude::config::toml_format{},
+        "<text>",
+        std::source_location::current());
+
+      THEN("both flags are written by name and read back")
+      {
+        REQUIRE(text.contains("marks = 'a|top'"));
+        REQUIRE(loaded.marks == value.marks);
       }
     }
   }
@@ -477,11 +596,9 @@ SCENARIO("text that is not valid UTF-8 is refused rather than silently changed",
 
       auto document = arude::config::detail::parse_toml(rendered, "<text>", std::source_location::current());
 
-      using arude::bitwise_operators::operator|;
-
       const auto loaded = arude::config::detail::read_root<toml_writer_test::writer_config>(
         document,
-        arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current,
+        arude::config::load_policy::upgrade_to_current,
         arude::config::toml_format{},
         "<text>",
         std::source_location::current());

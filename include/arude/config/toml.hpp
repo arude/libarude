@@ -109,14 +109,17 @@ template<configuration_c T, typename... Ps>
 ///
 /// \tparam T The root's configuration type.
 /// \param document The table. Retained by the read, not after it.
-/// \param policy What load() should do about a missing or older root.
+/// \param policy What load() should do about an older root or member. The
+///               document is there, so create changes nothing: every field
+///               that is not a std::optional must be in it.
 /// \param format The format's options, which pick the processors.
 /// \param source What the document came from, used in error messages only.
 /// \param loc The call site a failure reports.
 /// \return The root.
 /// \throws exception_t With invalid_payload if the document does not read as
-///         T, or invalid_version if it declares a version this build cannot
-///         load under the policy.
+///         T, a required field or a version key included, or
+///         invalid_version if it declares a version this build cannot load
+///         under the policy.
 ///
 template<configuration_c T>
 [[nodiscard]] auto read_root(
@@ -128,12 +131,14 @@ template<configuration_c T>
 
 ///
 /// Returns the first version newer than this build that a document declares,
-/// read as a load(create | upgrade_to_current) would and whatever becomes of
-/// that read. What store() asks before writing over a source: a source it
-/// cannot otherwise read is replaced, but newer data is not. reflect-cpp
-/// keeps reading a struct's other fields after one fails, so a newer member
-/// is found beside a typo; it stops reading an array at its first bad
-/// element, so a newer element after one in the same array is not.
+/// read as a load(upgrade_to_current) would and whatever becomes of that
+/// read. What store() asks before writing over a source: a source it cannot
+/// otherwise read is replaced, but newer data is not. reflect-cpp keeps
+/// reading a struct's other fields after one fails or is missing, so a newer
+/// member is found beside a typo; a versioned table that declares no version
+/// is still read for what it holds, so a newer member inside it is found. It
+/// stops reading an array at its first bad element, a missing field included,
+/// so a newer element after one in the same array is not.
 ///
 /// \tparam T The root's configuration type.
 /// \param document The table. Retained by the read, not after it.
@@ -215,32 +220,12 @@ auto read_root(
     "which alternative accepted the table, and a newer version could be silently overwritten. Move the "
     "versioned member out of the variant, or keep every alternative free of versioned<> members at any depth.");
 
-  // The processor combinations are compile-time, so the ones the policy and
-  // the format can ask for are instantiated here and picked at run time.
-  const auto create = is_set(policy, load_policy::create);
-  const auto strict = format.reject_unknown_fields;
-
+  // Processors are compile-time, so the read with rfl::NoExtraFields and the
+  // one without are both instantiated here, and the format picks at run time.
   auto context = read_context{policy};
 
-  const auto parsed = [&]() -> rfl::Result<versioned<T>>
-  {
-    if(create && strict)
-    {
-      return parse_root<T, rfl::DefaultIfMissing, rfl::NoExtraFields>(document, context);
-    }
-
-    if(create)
-    {
-      return parse_root<T, rfl::DefaultIfMissing>(document, context);
-    }
-
-    if(strict)
-    {
-      return parse_root<T, rfl::NoExtraFields>(document, context);
-    }
-
-    return parse_root<T>(document, context);
-  }();
+  const auto parsed = format.reject_unknown_fields ? parse_root<T, rfl::NoExtraFields>(document, context)
+                                                   : parse_root<T>(document, context);
 
   if(!parsed.has_value())
   {
@@ -255,17 +240,13 @@ auto read_root(
 template<configuration_c T>
 auto newer_in(toml::table& document) -> std::optional<std::string>
 {
-  // The two flags are combined on the underlying type, which is what a
-  // bitmask is for.
-  // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
-  const auto lenient = static_cast<load_policy>(
-    std::to_underlying(load_policy::create) | std::to_underlying(load_policy::upgrade_to_current));
-
-  auto context = read_context{lenient};
+  // Older versions are read so that what they hold is reached too, and
+  // unknown keys are let through so that they fail nothing.
+  auto context = read_context{load_policy::upgrade_to_current, true};
 
   // Whether the read succeeds does not matter: a newer version is recorded
   // where it is met, before reflect-cpp decides what to make of the rest.
-  std::ignore = parse_root<T, rfl::DefaultIfMissing>(document, context);
+  std::ignore = parse_root<T>(document, context);
 
   return context.newer();
 }
@@ -327,8 +308,9 @@ template<configuration_c T>
 /// \param text TOML text. Not retained.
 /// \param loc Where the call was made, which is what a failure reports. Left to its default.
 /// \return The parsed configuration.
-/// \throws exception_t With invalid_payload if the text does not parse, or
-///         invalid_version if it declares a version other than T's.
+/// \throws exception_t With invalid_payload if the text does not parse or
+///         lacks a field that is not a std::optional, or invalid_version if
+///         it declares a version other than T's.
 ///
 template<configuration_c T>
 [[nodiscard]] auto from_toml(std::string_view text, std::source_location loc = std::source_location::current()) -> T;
@@ -341,8 +323,9 @@ template<configuration_c T>
 /// \param text TOML text. Not retained.
 /// \param loc Where the call was made, which is what a failure reports. Left to its default.
 /// \return The configuration, migrated to To.
-/// \throws exception_t With invalid_payload if the text does not parse, or
-///         invalid_version if it declares a version this build has no type for.
+/// \throws exception_t With invalid_payload if the text does not parse or
+///         lacks a field that is not a std::optional, or invalid_version if
+///         it declares a version this build has no type for.
 ///
 template<configuration_c To>
 [[nodiscard]] auto from_toml_migrated(std::string_view text, std::source_location loc = std::source_location::current())

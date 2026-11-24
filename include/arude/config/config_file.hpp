@@ -784,34 +784,23 @@ public: // Methods
   ///
   /// Loads the file, all or nothing; see the class documentation.
   ///
-  /// `create`: where the source is not there, the root is `T{}`, so every
-  /// member takes the root's default member initialiser. Where the source
-  /// is there, each key that is missing takes a default: reflect-cpp's
-  /// rfl::DefaultIfMissing. A struct is read by starting from its own
-  /// type's `{}` and replacing what the file holds. So:
+  /// Every field must be in the source unless its type is a std::optional,
+  /// or a std::shared_ptr, which reflect-cpp reads as optional too: a missing
+  /// one is empty, and a missing std::optional is std::nullopt even where the
+  /// member has an initialiser. Any other missing field is invalid_payload,
+  /// naming the field, and so is a versioned table without its `version`
+  /// key.
   ///
-  /// - a member whose table is missing entirely takes the root's
-  ///   initialiser for that member;
-  /// - a member whose table is present but lacks a field takes that
-  ///   field's initialiser in the member's own type, not the value the
-  ///   root's initialiser gives it;
-  /// - a versioned table without a `version` key is read as the newest
-  ///   version;
-  /// - an older table's missing fields take the older type's defaults, and
-  ///   are then migrated.
-  ///
-  /// A type used under `create` must be default-constructible all the way
-  /// down. One with no initialiser is value-initialised.
-  ///
-  /// Without `create`, any missing field other than a std::optional is
-  /// invalid_payload, naming the field. Only a source that is not there at
-  /// all is not_found.
+  /// `create` covers a source that is not there at all, and nothing else:
+  /// the root is then `T{}`, so every member takes the root's default member
+  /// initialiser, where without the flag the load is not_found. A source that
+  /// is there is read the same with the flag or without it.
   ///
   /// \param policy What to do about a missing or older source. Left to its
   ///               default, upgrade_to_current.
   /// \param loc The call site a failure reports. Left to its default.
   /// \throws exception_t With invalid_payload if the source does not read
-  ///         as T, or a member is missing without create, invalid_version
+  ///         as T, a required field or a version key missing, invalid_version
   ///         if it declares a version this build cannot load under the
   ///         policy, not_found where the source is missing without create,
   ///         or io_error where the transport fails.

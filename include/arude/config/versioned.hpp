@@ -48,6 +48,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -500,8 +501,8 @@ struct variant_with_versioned<std::unordered_map<Key, Value, Hash, Equal, Alloca
 /// Reads a table as a versioned configuration of T.
 /// The version key decides: the table is read as T, migrated to T from the
 /// older version the key names, or refused where the key names none, names a
-/// newer version, or the policy declines the migration. A missing key reads
-/// as T only under a policy with create.
+/// newer version, or the policy declines the migration. A missing key is an
+/// invalid_payload under every policy.
 ///
 /// \tparam T The configuration type to end up at.
 /// \tparam ProcessorsType The processors the read runs under.
@@ -585,17 +586,15 @@ auto read_versioned(const toml_reader& reader, toml::node* const node) -> rfl::R
 
   if(version_node == nullptr)
   {
-    if constexpr(ProcessorsType::default_if_missing_)
+    if(reader.context().probing())
     {
-      // The table is read as T, whose version member takes its default,
-      // which is T::config_version: a file without a version key still
-      // reads under create.
-      return rfl::parsing::Parser<toml_reader, toml_writer, T, ProcessorsType>::read(reader, node);
+      // The table is still read as T, for whatever it holds: a member inside
+      // it may declare a newer version, and the probe has to find that even
+      // though this table does not read.
+      std::ignore = rfl::parsing::Parser<toml_reader, toml_writer, T, ProcessorsType>::read(reader, node);
     }
-    else
-    {
-      return rfl::error("the table declares no configuration version.");
-    }
+
+    return rfl::error("the table declares no configuration version.");
   }
 
   const auto version_result = reader.template to_basic_type<version_t>(version_node);
@@ -724,7 +723,8 @@ public: // Methods
     -> Result<arude::config::versioned<T>>;
 
   ///
-  /// Writes the value, stamped with T's version.
+  /// Writes the value, stamped with T's version. Whatever the writing throws
+  /// is recorded as a failure through the writer's context instead.
   /// \tparam P The parent type, as rfl::parsing::Parent spells it.
   /// \param writer The writer.
   /// \param val The wrapper.
@@ -785,14 +785,25 @@ auto Parser<
     const arude::config::detail::toml_writer& writer, const arude::config::versioned<T>& val, const P& parent) noexcept
   -> void
 {
-  // The version written is the one the type declares, whatever the value's
-  // version member happens to hold, so text cannot come out claiming to be
-  // a version it is not.
-  auto stamped = val.value();
-  stamped.version = T::config_version;
+  try
+  {
+    // The version written is the one the type declares, whatever the value's
+    // version member happens to hold, so text cannot come out claiming to be
+    // a version it is not.
+    auto stamped = val.value();
+    stamped.version = T::config_version;
 
-  Parser<arude::config::detail::toml_reader, arude::config::detail::toml_writer, T, ProcessorsType>::write(
-    writer, stamped, parent);
+    Parser<arude::config::detail::toml_reader, arude::config::detail::toml_writer, T, ProcessorsType>::write(
+      writer, stamped, parent);
+  }
+  catch(...)
+  {
+    // write() is noexcept, and reflect-cpp's own writers below it are not: a
+    // std::variant that is valueless by exception throws from std::visit.
+    // The failure is recorded rather than terminating the process, so the
+    // write is refused as any value TOML cannot hold is.
+    writer.context().fail(arude::exception_message());
+  }
 }
 
 ///

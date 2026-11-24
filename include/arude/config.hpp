@@ -38,11 +38,16 @@
 /// from_toml() and from_toml_migrated() convert between a configuration and
 /// TOML text with no transport in the way, for text that never touches one.
 ///
-/// Enumerations of a configuration are reflected by name only. reflect-cpp
-/// 0.19.0 cannot reflect a non-flag enum whose underlying type is not int
-/// unless rfl::config::enum_range<E> is specialised with bounds of that type;
-/// such an enum does not compile in a configuration without the
-/// specialisation.
+/// Every field of a configuration is required: a source that lacks one does
+/// not load. A field that may be left out is a std::optional, which reads as
+/// std::nullopt where it is missing, whatever its initialiser says;
+/// reflect-cpp reads a std::shared_ptr the same way, as null.
+/// load_policy::create only stands in for a source that is not there at all.
+///
+/// Enumerations of a configuration are reflected by name only, and only the
+/// enumerators within reflect-cpp's range: -256 to 256 by default, cut to
+/// what the underlying type holds, and rfl::config::enum_range<E> where that
+/// is specialised.
 ///
 /// The support builds on reflect-cpp's implementation as well as its public
 /// API: it specialises rfl::parsing::Parser and rfl::parsing::MapReader for its

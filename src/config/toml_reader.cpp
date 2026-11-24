@@ -23,8 +23,9 @@ namespace arude::config::detail
 
 ///
 ///
-read_context::read_context(const load_policy policy)
+read_context::read_context(const load_policy policy, const bool probing)
   : policy_{policy}
+  , probing_{probing}
 {
 }
 
@@ -33,6 +34,13 @@ read_context::read_context(const load_policy policy)
 auto read_context::policy() const -> load_policy
 {
   return policy_;
+}
+
+///
+///
+auto read_context::probing() const -> bool
+{
+  return probing_;
 }
 
 ///

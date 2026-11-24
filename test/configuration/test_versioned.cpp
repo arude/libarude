@@ -485,38 +485,41 @@ SCENARIO("the root itself is versioned like a member", "[config][versioned]")
       }
     }
 
-    WHEN("it is read with create")
+    WHEN("it is read with create and upgrade_to_current")
     {
       using arude::bitwise_operators::operator|;
 
-      const auto loaded = versioned_test::read<versioned_test::app>(
-        text, arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current);
+      const auto policy = arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current;
 
-      THEN("it is read as the newest version, with every member at its default")
+      const auto failure = versioned_test::failure_of<arude::config::exception_t>(
+        [&text, policy] -> void { std::ignore = versioned_test::read<versioned_test::app>(text, policy); });
+
+      THEN("it is the same invalid_payload: no policy reads a missing version key as the newest version")
       {
-        REQUIRE(loaded.version == 1);
-        REQUIRE(loaded.name == "unversioned");
-        REQUIRE(loaded.network.value().hostname == "v2-host");
-        REQUIRE(loaded.network.value().port == 80);
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("declares no configuration version."));
       }
     }
   }
 
   GIVEN("a member's table that declares no version")
   {
-    constexpr auto text = std::string_view{"version = 1\n[network]\nhostname = \"bare\"\n"};
+    constexpr auto text = std::string_view{"version = 1\nname = \"app\"\n[network]\nhostname = \"bare\"\nport = 80\n"};
 
-    WHEN("it is read with create")
+    WHEN("it is read with create and upgrade_to_current")
     {
       using arude::bitwise_operators::operator|;
 
-      const auto loaded = versioned_test::read<versioned_test::app>(
-        text, arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current);
+      const auto policy = arude::config::load_policy::create | arude::config::load_policy::upgrade_to_current;
 
-      THEN("the table is read as the newest version, whose version member takes its default")
+      const auto failure = versioned_test::failure_of<arude::config::exception_t>(
+        [&text, policy] -> void { std::ignore = versioned_test::read<versioned_test::app>(text, policy); });
+
+      THEN("it is an invalid_payload naming the member")
       {
-        REQUIRE(loaded.network.value().hostname == "bare");
-        REQUIRE(loaded.network.value().version == 2);
+        REQUIRE(failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(failure.str().contains("'network'"));
+        REQUIRE(failure.str().contains("the table declares no configuration version."));
       }
     }
   }
@@ -583,10 +586,28 @@ SCENARIO("a versioned member may nest anywhere a member can sit", "[config][vers
     }
   }
 
+  GIVEN("a holder whose optional versioned member is missing")
+  {
+    constexpr auto text =
+      std::string_view{"version = 1\nmany = []\nby_name = {}\n[plain]\nversion = 1\nhost = \"field\"\n"};
+
+    WHEN("it is read")
+    {
+      const auto loaded =
+        versioned_test::read<versioned_test::holder>(text, arude::config::load_policy::upgrade_to_current);
+
+      THEN("the optional is empty, and the rest is read")
+      {
+        REQUIRE_FALSE(loaded.maybe_net.has_value());
+        REQUIRE(loaded.plain.value().host == "field");
+      }
+    }
+  }
+
   GIVEN("a holder whose vector holds a newer member")
   {
     constexpr auto text =
-      std::string_view{"version = 1\n[plain]\nversion = 1\n"
+      std::string_view{"version = 1\nby_name = {}\n[plain]\nversion = 1\nhost = \"field\"\n"
                        "[[many]]\nversion = 1\nhost = \"first\"\n[[many]]\nversion = 2\nhostname = \"newer\"\n"};
 
     WHEN("it is read")

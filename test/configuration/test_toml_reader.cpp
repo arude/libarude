@@ -34,7 +34,7 @@ namespace
 ///
 /// A colour, which reflect-cpp reads by name.
 ///
-enum class colour // NOLINT(performance-enum-size): reflect-cpp 0.19.0 needs enum_range for a non-int enum.
+enum class colour // NOLINT(performance-enum-size): kept on int, the default, beside the narrower small_colour.
 {
   ///
   /// Red.
@@ -64,7 +64,7 @@ enum class flags // NOLINT(performance-enum-size): kept signed, so a negative fl
 };
 
 ///
-/// Combines two flags, as rfl's is_flag_enum concept requires.
+/// Combines two flags, which is what makes reflect-cpp treat the enum as flags.
 ///
 /// \param left One flag.
 /// \param right Another.
@@ -76,8 +76,8 @@ constexpr auto operator|(flags left, flags right) -> flags
 }
 
 ///
-/// A colour on a narrower underlying type, which reflect-cpp reflects once
-/// rfl::config::enum_range names bounds of that type.
+/// A colour on a narrower underlying type, which reflect-cpp reflects with no
+/// rfl::config::enum_range specialised for it.
 ///
 enum class small_colour : std::uint8_t
 {
@@ -159,23 +159,30 @@ struct checks
 };
 
 ///
-/// Reads text as a configuration, leniently: the checks pin how one field
-/// fails, not that the other fields are all present.
+/// Reads text as a configuration, over the fields of a default one: the
+/// checks pin how one field fails, and every field is required, so each key
+/// the text holds replaces that of `checks{}` as written, and the rest stay.
 /// \param text The text. Not retained.
 /// \return The configuration.
 /// \throws arude::config::exception_t As detail::read_root does.
 ///
 [[nodiscard]] auto read(std::string_view text) -> checks
 {
-  auto document = arude::config::detail::parse_toml(text, "<text>", std::source_location::current());
+  auto document =
+    arude::config::detail::parse_toml(arude::config::to_toml(checks{}), "<defaults>", std::source_location::current());
 
-  // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange): the flags combine, which is what a bitmask is for.
-  const auto lenient = static_cast<arude::config::load_policy>(
-    std::to_underlying(arude::config::load_policy::create) |
-    std::to_underlying(arude::config::load_policy::upgrade_to_current));
+  for(auto&& [key, value] : arude::config::detail::parse_toml(text, "<text>", std::source_location::current()))
+  {
+    value.visit(
+      [&document, &key](auto&& node) -> void { document.insert_or_assign(key, std::forward<decltype(node)>(node)); });
+  }
 
   return arude::config::detail::read_root<checks>(
-    document, lenient, arude::config::toml_format{}, "<text>", std::source_location::current());
+    document,
+    arude::config::load_policy::upgrade_to_current,
+    arude::config::toml_format{},
+    "<text>",
+    std::source_location::current());
 }
 
 ///
@@ -203,29 +210,6 @@ template<typename E>
 } // namespace
 
 } // namespace toml_reader_test
-
-namespace rfl::config
-{
-
-///
-/// The range of the narrow colour, in its own underlying type, which is what
-/// reflect-cpp 0.19.0 needs to reflect a non-flag enum that is not int.
-///
-template<>
-struct enum_range<toml_reader_test::small_colour>
-{
-  ///
-  /// The lowest enumerator's value.
-  ///
-  static constexpr auto min = std::uint8_t{0};
-
-  ///
-  /// The highest enumerator's value.
-  ///
-  static constexpr auto max = std::uint8_t{1};
-};
-
-} // namespace rfl::config
 
 SCENARIO("an integer that does not fit the field's type is refused", "[config][toml_reader]")
 {
@@ -585,7 +569,7 @@ SCENARIO("two map keys spelling one integer are refused rather than silently mer
   }
 }
 
-SCENARIO("a non-int enum reads once its range is specialised", "[config][toml_reader]")
+SCENARIO("a non-int enum reads with no range specialised", "[config][toml_reader]")
 {
   GIVEN("text whose narrow colour is spelt by name")
   {
