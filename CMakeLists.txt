@@ -191,8 +191,12 @@ target_compile_options(${PROJECT_NAME} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>
 
 # --coverage is understood by both GCC and Clang and emits gcov-format data.
 # PUBLIC so the test executable is instrumented and linked the same way.
+#
+# -fprofile-update=atomic because the tests run threads through the same
+# code: plain counters race, a lost update can leave a line's count
+# negative, and gcovr then refuses the whole report.
 if(ARUDE_ENABLE_COVERAGE)
-  target_compile_options(${PROJECT_NAME} PUBLIC --coverage -O0 -g)
+  target_compile_options(${PROJECT_NAME} PUBLIC --coverage -fprofile-update=atomic -O0 -g)
   target_link_options(${PROJECT_NAME} PUBLIC --coverage)
 endif()
 
