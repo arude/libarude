@@ -30,12 +30,18 @@
 #include "arude/exception_report.hpp"
 #include "arude/type_name.hpp"
 
+#include <rfl/Box.hpp>
+#include <rfl/Field.hpp>
+#include <rfl/Generic.hpp>
+#include <rfl/internal/has_reflector.hpp>
 #include <rfl/named_tuple_t.hpp>
 #include <rfl/parsing/Parent.hpp>
 #include <rfl/parsing/Parser_base.hpp>
 #include <rfl/parsing/schema/Type.hpp>
+#include <rfl/Ref.hpp>
 #include <rfl/Result.hpp>
 #include <rfl/TaggedUnion.hpp>
+#include <rfl/Tuple.hpp>
 #include <rfl/Variant.hpp>
 #include <toml++/toml.hpp>
 
@@ -43,14 +49,20 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <format>
+#include <forward_list>
+#include <list>
 #include <map>
+#include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -174,328 +186,596 @@ template<configuration_c U>
 inline constexpr auto is_versioned_v<versioned<U>> = true;
 
 ///
-/// Whether T, or anything inside it, is a versioned<> member. Recurse
-/// through reflect-cpp's field reflection, the containers a member may be
-/// held in, and every variant alternative, so a versioned hidden inside an
-/// alternative is found too.
+/// Lists types held, for a held_types specialisation to derive from.
+/// \tparam Held The types held.
 ///
-template<typename T>
-struct contains_versioned;
-
-///
-/// Whether any field of a reflected type contains a versioned<> member.
-///
-template<typename NamedTuple>
-struct named_tuple_contains_versioned;
-
-///
-/// \see named_tuple_contains_versioned
-///
-template<typename... Fields>
-struct named_tuple_contains_versioned<rfl::NamedTuple<Fields...>>
+template<typename... Held>
+struct holding
 {
   ///
-  /// true if any field's type contains one.
+  /// \see held_types::present
   ///
-  static constexpr auto value = (contains_versioned<typename Fields::Type>::value || ...);
+  static constexpr auto present = true;
+
+  ///
+  /// \see held_types::types_t
+  ///
+  using types_t = std::tuple<Held...>;
 };
 
 ///
-/// Whether any alternative of a variant-like type holds a versioned<> member
-/// at any depth. A variant is not read through one type, so the version
-/// rules cannot be applied to a table two alternatives could own; the ban in
-/// read_root() and write_root() makes that case impossible to build.
+/// The inner type a reflect-cpp wrapper names, if it names one: the
+/// ReflectionType of rfl::Validator and rfl::Skip, the Type of rfl::Field,
+/// rfl::Flatten, rfl::Rename, rfl::DefaultVal and the like, or the value_type
+/// of a container-like wrapper such as rfl::Result. ReflectionType is tried
+/// first, as it is the type reflect-cpp's Parser_default reads where no
+/// dedicated parser applies; Type is what the wrappers' dedicated parsers
+/// read, and value_type the name a container-like wrapper uses.
 ///
-template<typename T>
-struct variant_alternatives
+/// \tparam T Type to look into.
+/// \tparam Priority Which of the three names is being tried.
+/// \tparam Enable Always void; present so a name T lacks is a substitution
+///                failure rather than an error.
+///
+template<typename T, int Priority = 0, typename Enable = void>
+struct wrapped_inner
 {
   ///
-  /// Whether T is a variant-like type at all.
+  /// Whether T names an inner type at all.
   ///
   static constexpr auto present = false;
 
   ///
-  /// Whether any alternative holds a versioned<> member.
+  /// The inner type, meaningless unless present.
   ///
-  static constexpr auto holds_versioned = false;
+  using type_t = void;
 };
 
 ///
-/// \see variant_alternatives
+/// \see wrapped_inner
 ///
-template<typename... Alternatives>
-struct variant_alternatives<std::variant<Alternatives...>>
+template<typename T>
+struct wrapped_inner<T, 0, std::void_t<typename T::ReflectionType>>
 {
   ///
-  /// \see variant_alternatives::present
+  /// \see wrapped_inner::present
   ///
   static constexpr auto present = true;
 
   ///
-  /// \see variant_alternatives::holds_versioned
+  /// \see wrapped_inner::type_t
   ///
-  static constexpr auto holds_versioned = (contains_versioned<Alternatives>::value || ...);
+  using type_t = typename T::ReflectionType;
 };
 
 ///
-/// \see variant_alternatives
+/// \see wrapped_inner
 ///
-template<typename... Alternatives>
-struct variant_alternatives<rfl::Variant<Alternatives...>>
+template<typename T>
+struct wrapped_inner<T, 1, std::void_t<typename T::Type>>
 {
   ///
-  /// \see variant_alternatives::present
+  /// \see wrapped_inner::present
   ///
   static constexpr auto present = true;
 
   ///
-  /// \see variant_alternatives::holds_versioned
+  /// \see wrapped_inner::type_t
   ///
-  static constexpr auto holds_versioned = (contains_versioned<Alternatives>::value || ...);
+  using type_t = typename T::Type;
 };
 
 ///
-/// \see variant_alternatives
+/// \see wrapped_inner
+///
+template<typename T>
+struct wrapped_inner<T, 2, std::void_t<typename T::value_type>>
+{
+  ///
+  /// \see wrapped_inner::present
+  ///
+  static constexpr auto present = true;
+
+  ///
+  /// \see wrapped_inner::type_t
+  ///
+  using type_t = typename T::value_type;
+};
+
+///
+/// The first of the three inner types T names, in the order above.
+/// \tparam T Type to look into.
+///
+template<typename T>
+struct wrapped_inner_of
+  : std::conditional_t<
+      wrapped_inner<T, 0>::present,
+      wrapped_inner<T, 0>,
+      std::conditional_t<wrapped_inner<T, 1>::present, wrapped_inner<T, 1>, wrapped_inner<T, 2>>>
+{};
+
+///
+/// What a wrapper holds, or nothing where it names no inner type.
+/// A partial specialisation rather than an if constexpr branch, so type_t is
+/// never named for a type that has none.
+///
+/// \tparam T Type to look into.
+/// \tparam Present Whether T names an inner type.
+///
+template<typename T, bool Present = wrapped_inner_of<T>::present>
+struct wrapped_held
+{
+  ///
+  /// \see held_types::present
+  ///
+  static constexpr auto present = false;
+
+  ///
+  /// \see held_types::types_t
+  ///
+  using types_t = std::tuple<>;
+};
+
+///
+/// \see wrapped_held
+///
+template<typename T>
+struct wrapped_held<T, true>
+{
+  ///
+  /// \see held_types::present
+  ///
+  static constexpr auto present = true;
+
+  ///
+  /// \see held_types::types_t
+  ///
+  using types_t = std::tuple<typename wrapped_inner_of<T>::type_t>;
+};
+
+///
+/// What a class with its own rfl::Reflector specialisation holds: reflect-cpp
+/// reads and writes such a type as Reflector<T>::ReflType, whatever members
+/// the class itself has.
+/// \tparam T Type to look into.
+/// \tparam Present Whether rfl::Reflector<T> is specialised for T.
+///
+template<typename T, bool Present = rfl::internal::has_read_reflector<T> || rfl::internal::has_write_reflector<T>>
+struct reflector_held : wrapped_held<T, !std::is_aggregate_v<T> && wrapped_inner_of<T>::present>
+{};
+
+///
+/// \see reflector_held
+///
+template<typename T>
+struct reflector_held<T, true> : holding<typename rfl::Reflector<T>::ReflType>
+{};
+
+///
+/// The types a wrapper or container holds, for the searches below to look
+/// into. Every wrapper reflect-cpp reads as its inner type is covered by
+/// wrapped_held, whatever it calls that inner type: rfl::Field, rfl::Flatten,
+/// rfl::Rename, rfl::DefaultVal, rfl::Description, rfl::Attribute, rfl::Skip
+/// and its two variants, rfl::Validator and rfl::Result among them, and a
+/// class with an rfl::Reflector is covered by reflector_held. The rule is
+/// deliberately broad: a wrapper this search cannot see through is a compile
+/// error the user can work around, where one it does not see through would
+/// let newer data be overwritten. A struct is searched through reflect-cpp's
+/// field reflection instead, and anything else holds nothing. The containers
+/// below are listed so that what they hold is their element or their value,
+/// not the container's own value_type.
+///
+/// \tparam T Type to look into.
+///
+template<typename T>
+struct held_types : reflector_held<T>
+{};
+
+///
+/// \see held_types
+/// rfl::Generic is dynamic: its ReflectionType is a std::optional of a
+/// std::variant that holds rfl::Generic again, so following it would not
+/// terminate. It holds nothing this search can name.
+///
+template<>
+struct held_types<rfl::Generic> : wrapped_held<rfl::Generic, false>
+{};
+
+///
+/// \see held_types
+///
+template<configuration_c U>
+struct held_types<versioned<U>> : holding<U>
+{};
+///
+/// \see held_types
+/// An untagged variant is searched through its alternatives: it is the
+/// alternatives that may hold a versioned<> member or a tagged union.
+///
+template<typename... Alternatives>
+struct held_types<std::variant<Alternatives...>> : holding<Alternatives...>
+{};
+
+///
+/// \see held_types
+///
+template<typename... Alternatives>
+struct held_types<rfl::Variant<Alternatives...>> : holding<Alternatives...>
+{};
+
+///
+/// \see held_types
+/// A tagged union is searched through its alternatives too, so an untagged
+/// variant inside one is found; the alternatives themselves may hold
+/// versioned<> members.
 ///
 template<rfl::internal::StringLiteral Discriminator, typename... Alternatives>
-struct variant_alternatives<rfl::TaggedUnion<Discriminator, Alternatives...>>
-{
-  ///
-  /// \see variant_alternatives::present
-  ///
-  static constexpr auto present = true;
-
-  ///
-  /// \see variant_alternatives::holds_versioned
-  ///
-  static constexpr auto holds_versioned = (contains_versioned<Alternatives>::value || ...);
-};
-
-///
-/// Whether a struct that reflect-cpp reflects field by field holds a
-/// versioned<> member at any depth. A partial specialisation rather than an
-/// if constexpr branch, so rfl::named_tuple_t is never named for a type that
-/// is not such a struct: MSVC instantiates a discarded branch inside a lambda
-/// in a class template, and named_tuple_t of an int does not compile.
-///
-/// \tparam T Type to test.
-///
-template<typename T, bool = std::is_class_v<T> && std::is_aggregate_v<T>>
-struct reflected_contains_versioned : std::false_type
+struct held_types<rfl::TaggedUnion<Discriminator, Alternatives...>> : holding<Alternatives...>
 {};
 
 ///
-/// \see reflected_contains_versioned
-///
-/// \tparam T A struct reflect-cpp reflects field by field.
-///
-template<typename T>
-struct reflected_contains_versioned<T, true>
-  : std::bool_constant<named_tuple_contains_versioned<rfl::named_tuple_t<T>>::value>
-{};
-
-///
-/// \see contains_versioned
-///
-template<typename T>
-struct contains_versioned
-{
-  ///
-  /// true if T is a versioned<>, or a variant, a reflected aggregate or a
-  /// container holding one at any depth.
-  ///
-  static constexpr auto value = std::conditional_t < is_versioned_v<T> || variant_alternatives<T>::present,
-                        std::bool_constant<is_versioned_v<T> || variant_alternatives<T>::holds_versioned>,
-                        reflected_contains_versioned < T >> ::value;
-};
-
-///
-/// \see contains_versioned
+/// \see held_types
+/// rfl::Result is read as an untagged variant over its value and an error
+/// alternative; its value is what may hold a versioned<> member or a tagged
+/// union. Named explicitly rather than through wrapped_inner's value_type,
+/// so the intent is stated here rather than derived.
 ///
 template<typename U>
-struct contains_versioned<std::optional<U>>
-{
-  ///
-  /// true if the element does.
-  ///
-  static constexpr auto value = contains_versioned<U>::value;
-};
+struct held_types<rfl::Result<U>> : holding<U>
+{};
 
 ///
-/// \see contains_versioned
+/// \see held_types
 ///
-template<typename U, typename Allocator>
-struct contains_versioned<std::vector<U, Allocator>>
-{
-  ///
-  /// true if an element does.
-  ///
-  static constexpr auto value = contains_versioned<U>::value;
-};
+template<typename U>
+struct held_types<std::optional<U>> : holding<U>
+{};
 
 ///
-/// \see contains_versioned
+/// \see held_types
+///
+template<typename U, typename... Rest>
+struct held_types<std::unique_ptr<U, Rest...>> : holding<U>
+{};
+
+///
+/// \see held_types
+///
+template<typename U>
+struct held_types<std::shared_ptr<U>> : holding<U>
+{};
+
+///
+/// \see held_types
+///
+template<typename U, rfl::Copyability C>
+struct held_types<rfl::Box<U, C>> : holding<U>
+{};
+
+///
+/// \see held_types
+///
+template<typename U>
+struct held_types<rfl::Ref<U>> : holding<U>
+{};
+
+///
+/// \see held_types
+/// Listed because std::array is an aggregate, which reflect-cpp reads as an
+/// array rather than a struct.
 ///
 template<typename U, std::size_t N>
-struct contains_versioned<std::array<U, N>>
-{
-  ///
-  /// true if the element type does. Specialised because std::array is an
-  /// aggregate, which reflect-cpp reads as an array rather than a struct.
-  ///
-  static constexpr auto value = contains_versioned<U>::value;
-};
+struct held_types<std::array<U, N>> : holding<U>
+{};
 
 ///
-/// \see contains_versioned
+/// \see held_types
+/// A C array is read element by element by reflect-cpp, not as a struct, so
+/// the searches must see into one, which is what the NOLINT below names.
 ///
-template<typename Key, typename Value, typename Compare, typename Allocator>
-struct contains_versioned<std::map<Key, Value, Compare, Allocator>>
-{
-  ///
-  /// true if a key or a value does.
-  ///
-  static constexpr auto value = contains_versioned<Key>::value || contains_versioned<Value>::value;
-};
+template<typename U, std::size_t N>
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays): the searches must see in.
+struct held_types<U[N]> : holding<U>
+{};
 
 ///
-/// \see contains_versioned
+/// \see held_types
+/// A pointer is read as the type it points to, where raw pointers are enabled.
 ///
-template<typename Key, typename Value, typename Hash, typename Equal, typename Allocator>
-struct contains_versioned<std::unordered_map<Key, Value, Hash, Equal, Allocator>>
-{
-  ///
-  /// true if a key or a value does.
-  ///
-  static constexpr auto value = contains_versioned<Key>::value || contains_versioned<Value>::value;
-};
+template<typename U>
+struct held_types<U*> : holding<U>
+{};
 
 ///
-/// Whether T, or anything inside it, is a variant whose alternatives hold a
-/// versioned<> member at any depth. The static_assert in read_root() and
-/// write_root() refuses such a type, because the version rules cannot be
-/// applied to a table that two alternatives could own: which version applied
-/// would depend on the order of the alternatives, and a newer version could
-/// be silently overwritten.
+/// \see held_types
 ///
-template<typename T>
-struct variant_with_versioned;
+template<typename U, typename... Rest>
+struct held_types<std::vector<U, Rest...>> : holding<U>
+{};
 
 ///
-/// Whether any field of a reflected type is a variant whose alternatives
-/// hold a versioned<> member.
+/// \see held_types
 ///
-template<typename NamedTuple>
-struct named_tuple_variant_with_versioned;
+template<typename U, typename... Rest>
+struct held_types<std::deque<U, Rest...>> : holding<U>
+{};
 
 ///
-/// \see named_tuple_variant_with_versioned
+/// \see held_types
+///
+template<typename U, typename... Rest>
+struct held_types<std::list<U, Rest...>> : holding<U>
+{};
+
+///
+/// \see held_types
+///
+template<typename U, typename... Rest>
+struct held_types<std::forward_list<U, Rest...>> : holding<U>
+{};
+
+///
+/// \see held_types
+///
+template<typename U, typename... Rest>
+struct held_types<std::set<U, Rest...>> : holding<U>
+{};
+
+///
+/// \see held_types
+///
+template<typename U, typename... Rest>
+struct held_types<std::multiset<U, Rest...>> : holding<U>
+{};
+
+///
+/// \see held_types
+///
+template<typename U, typename... Rest>
+struct held_types<std::unordered_set<U, Rest...>> : holding<U>
+{};
+
+///
+/// \see held_types
+///
+template<typename U, typename... Rest>
+struct held_types<std::unordered_multiset<U, Rest...>> : holding<U>
+{};
+
+///
+/// \see held_types
+///
+template<typename Key, typename Value, typename... Rest>
+struct held_types<std::map<Key, Value, Rest...>> : holding<Key, Value>
+{};
+
+///
+/// \see held_types
+///
+template<typename Key, typename Value, typename... Rest>
+struct held_types<std::multimap<Key, Value, Rest...>> : holding<Key, Value>
+{};
+
+///
+/// \see held_types
+///
+template<typename Key, typename Value, typename... Rest>
+struct held_types<std::unordered_map<Key, Value, Rest...>> : holding<Key, Value>
+{};
+
+///
+/// \see held_types
+///
+template<typename Key, typename Value, typename... Rest>
+struct held_types<std::unordered_multimap<Key, Value, Rest...>> : holding<Key, Value>
+{};
+
+///
+/// \see held_types
+///
+template<typename First, typename Second>
+struct held_types<std::pair<First, Second>> : holding<First, Second>
+{};
+
+///
+/// \see held_types
+///
+template<typename... Elements>
+struct held_types<std::tuple<Elements...>> : holding<Elements...>
+{};
+
+///
+/// \see held_types
+///
+template<typename... Elements>
+struct held_types<rfl::Tuple<Elements...>> : holding<Elements...>
+{};
+
+///
+/// \see held_types
+/// A named tuple holds its fields, which reflect-cpp reads as a table like
+/// any struct's.
 ///
 template<typename... Fields>
-struct named_tuple_variant_with_versioned<rfl::NamedTuple<Fields...>>
-{
-  ///
-  /// true if any field's type is one.
-  ///
-  static constexpr auto value = (variant_with_versioned<typename Fields::Type>::value || ...);
-};
+struct held_types<rfl::NamedTuple<Fields...>> : holding<typename Fields::Type...>
+{};
 
 ///
-/// Whether a struct that reflect-cpp reflects field by field holds, in a
-/// field, a variant whose alternatives hold a versioned<> member.
-/// \see reflected_contains_versioned for why this is a specialisation.
+/// The recursion bound of the two searches below: the most nesting levels a
+/// configuration type may have between its root and its deepest member.
+/// Every step of a search spends one level, and a reflected aggregate, a
+/// container, a wrapper and a pointer each take one, so 64 reaches any real
+/// configuration several times over. The searches are lazy — a found result
+/// stops further instantiation through std::disjunction — so headroom that
+/// is not used costs nothing. A recursive type shows everything it holds
+/// within its first cycle, so the bound loses nothing real; only a
+/// non-recursive nesting deeper than 64 levels could be missed, and the
+/// depth bound that accepts it is what keeps the search linear.
+///
+inline constexpr auto default_depth = std::size_t{64};
+
+/// Whether T is an rfl::TaggedUnion, the one variant whose alternatives may
+/// hold versioned<> members.
+template<typename T>
+inline constexpr auto is_tagged_v = false;
+
+/// \see is_tagged_v
+template<rfl::internal::StringLiteral Discriminator, typename... Alternatives>
+inline constexpr auto is_tagged_v<rfl::TaggedUnion<Discriminator, Alternatives...>> = true;
+
+/// Whether T is a std::variant, an rfl::Variant or an rfl::Result: the three
+/// untagged variants a versioned configuration must not contain.
+template<typename T>
+inline constexpr auto is_untagged_variant_v = false;
+
+/// \see is_untagged_variant_v
+template<typename... Alternatives>
+inline constexpr auto is_untagged_variant_v<std::variant<Alternatives...>> = true;
+
+/// \see is_untagged_variant_v
+template<typename... Alternatives>
+inline constexpr auto is_untagged_variant_v<rfl::Variant<Alternatives...>> = true;
+
+/// \see is_untagged_variant_v
+template<typename U>
+inline constexpr auto is_untagged_variant_v<rfl::Result<U>> = true;
+
+/// The leaf predicate of contains_versioned_or_tagged: a versioned<> member,
+/// which carries its own version, or an rfl::TaggedUnion, which records a
+/// tag no alternative answers to.
+/// \tparam T Type to test.
+template<typename T>
+struct versioned_or_tagged_leaf : std::bool_constant<is_versioned_v<T> || is_tagged_v<T>>
+{};
+
+/// The leaf predicate of contains_untagged_variant.
+/// \tparam T Type to test.
+template<typename T>
+struct untagged_variant_leaf : std::bool_constant<is_untagged_variant_v<T>>
+{};
+
+template<template<typename> class Leaf, typename Held, std::size_t Depth>
+struct search_each;
+
+template<
+  template<typename> class Leaf,
+  typename T,
+  std::size_t Depth,
+  bool IsReflected = !held_types<T>::present && std::is_class_v<T> && std::is_aggregate_v<T>>
+struct search_reflected;
+
+template<template<typename> class Leaf, typename NamedTuple, std::size_t Depth>
+struct search_named_tuple;
+
+/// A depth-bounded search over what a type holds, for a leaf predicate. It is
+/// the shared engine of the two traits below, and it is what keeps both cheap:
+/// there is no visited pack, so a type is searched once per depth reached
+/// rather than once per path to it, and a found result stops the walk through
+/// std::disjunction.
+///
+/// The primary applies the leaf to T, then recurses into what held_types
+/// lists and into a reflected aggregate's fields. Depth counts down at every
+/// step into a container, a wrapper, a pointer or a field, and Depth 0 stops
+/// the descent at the leaf alone, so a recursive type terminates and a
+/// non-recursive nesting beyond default_depth is cut off.
+///
+/// \tparam Leaf The predicate that decides a type, as a bool_constant.
+/// \tparam T The type to test.
+/// \tparam Depth The number of nesting levels still open below T.
+template<template<typename> class Leaf, typename T, std::size_t Depth>
+struct search
+  : std::disjunction<
+      Leaf<T>,
+      search_each<Leaf, typename held_types<T>::types_t, Depth - 1>,
+      search_reflected<Leaf, T, Depth - 1>>
+{};
+
+/// \see search
+template<template<typename> class Leaf, typename T>
+struct search<Leaf, T, 0> : std::bool_constant<Leaf<T>::value>
+{};
+
+/// Folds search over a std::tuple of held types.
+/// \tparam Leaf The predicate.
+/// \tparam Held The tuple of types.
+/// \tparam Depth The number of nesting levels still open below each type.
+/// \see search_each
+template<template<typename> class Leaf, typename... Held, std::size_t Depth>
+struct search_each<Leaf, std::tuple<Held...>, Depth> : std::disjunction<search<Leaf, Held, Depth>...>
+{};
+
+/// Reflects a struct into its fields and searches each, where reflect-cpp
+/// reads them field by field. A partial specialisation rather than an if
+/// constexpr branch, so rfl::named_tuple_t is never named for a type that is
+/// not a struct reflect-cpp reflects.
+///
+/// \tparam Leaf The predicate.
+/// \tparam T The type to reflect.
+/// \tparam Depth The number of nesting levels still open below a field.
+/// \tparam IsReflected Whether T is a struct with no held type for the search.
+template<template<typename> class Leaf, typename T, std::size_t Depth, bool IsReflected>
+struct search_reflected : std::false_type
+{};
+
+/// \see search_reflected
+template<template<typename> class Leaf, typename T, std::size_t Depth>
+struct search_reflected<Leaf, T, Depth, true> : search_named_tuple<Leaf, rfl::named_tuple_t<T>, Depth>
+{};
+
+/// Folds search over the fields of a reflected type.
+/// \tparam Leaf The predicate.
+/// \tparam NamedTuple The rfl::NamedTuple reflect-cpp reflects the type as.
+/// \tparam Depth The number of nesting levels still open below a field.
+/// \see search_named_tuple
+template<template<typename> class Leaf, typename... Fields, std::size_t Depth>
+struct search_named_tuple<Leaf, rfl::NamedTuple<Fields...>, Depth>
+  : std::disjunction<search<Leaf, typename Fields::Type, Depth>...>
+{};
+
+/// Whether a configuration type contains a versioned<> member or an
+/// rfl::TaggedUnion anywhere inside it, at any depth. The counterpart of
+/// contains_untagged_variant — see that trait for the rule the two together
+/// enforce, and for the one hole in what they can see.
 ///
 /// \tparam T Type to test.
-///
-template<typename T, bool = std::is_class_v<T> && std::is_aggregate_v<T>>
-struct reflected_variant_with_versioned : std::false_type
+/// \tparam Depth Recursion bound, described under search.
+template<typename T, std::size_t Depth = default_depth>
+struct contains_versioned_or_tagged : search<versioned_or_tagged_leaf, T, Depth>
 {};
 
+/// Whether a configuration type contains a std::variant, an rfl::Variant or
+/// an rfl::Result anywhere inside it, at any depth. An rfl::Result is one of
+/// the three because reflect-cpp reads it the way it reads an untagged
+/// variant: it tries the value, then its error alternative.
 ///
-/// \see reflected_variant_with_versioned
+/// Together with contains_versioned_or_tagged this is the support's one
+/// compile-time rule. A type read and written as a configuration may hold
+/// whatever it likes. A type that contains a versioned<> member or an
+/// rfl::TaggedUnion anywhere must not also contain an untagged variant
+/// anywhere: read_root() and write_root() refuse that with a static_assert.
+/// The why: reflect-cpp reads an untagged variant as the first alternative
+/// that accepts the table, so a newer version reached through a later
+/// alternative could be misread or silently overwritten. rfl::TaggedUnion is
+/// the way to have a choice in a versioned configuration, because its tag
+/// picks the one alternative read. A configuration with no versioned<> and
+/// no rfl::TaggedUnion has no version to protect and may use variants
+/// freely. The root itself does not count; only versioned<> members and
+/// rfl::TaggedUnion alternatives do.
 ///
-/// \tparam T A struct reflect-cpp reflects field by field.
+/// The search sees through every wrapper and container reflect-cpp reads a
+/// configuration through, and into every reflected aggregate's fields, so a
+/// variant behind a std::optional, a std::vector, a smart pointer or a field
+/// is found. A class the search cannot see into — no reflection, and no
+/// wrapper, container or rfl::Reflector — is taken for one that holds
+/// nothing: such a type is read through a custom rfl::parsing::Parser, and
+/// detecting one is out of scope, so a variant hidden inside one is not
+/// refused.
 ///
-template<typename T>
-struct reflected_variant_with_versioned<T, true>
-  : std::bool_constant<named_tuple_variant_with_versioned<rfl::named_tuple_t<T>>::value>
+/// \tparam T Type to test.
+/// \tparam Depth Recursion bound, described under search.
+template<typename T, std::size_t Depth = default_depth>
+struct contains_untagged_variant : search<untagged_variant_leaf, T, Depth>
 {};
-
-///
-/// \see variant_with_versioned
-///
-template<typename T>
-struct variant_with_versioned
-{
-  ///
-  /// true if T is such a variant, or holds one in a field or a container.
-  ///
-  static constexpr auto value = std::conditional_t<
-    variant_alternatives<T>::present,
-    std::bool_constant<variant_alternatives<T>::holds_versioned>,
-    reflected_variant_with_versioned<T>>::value;
-};
-
-///
-/// \see variant_with_versioned
-///
-template<typename U>
-struct variant_with_versioned<std::optional<U>>
-{
-  ///
-  /// true if the element is one.
-  ///
-  static constexpr auto value = variant_with_versioned<U>::value;
-};
-
-///
-/// \see variant_with_versioned
-///
-template<typename U, std::size_t N>
-struct variant_with_versioned<std::array<U, N>>
-{
-  ///
-  /// true if the element type is one. Specialised because std::array is an
-  /// aggregate, which reflect-cpp reads as an array rather than a struct.
-  ///
-  static constexpr auto value = variant_with_versioned<U>::value;
-};
-
-///
-/// \see variant_with_versioned
-///
-template<typename U, typename Allocator>
-struct variant_with_versioned<std::vector<U, Allocator>>
-{
-  ///
-  /// true if an element is one.
-  ///
-  static constexpr auto value = variant_with_versioned<U>::value;
-};
-
-///
-/// \see variant_with_versioned
-///
-template<typename Key, typename Value, typename Compare, typename Allocator>
-struct variant_with_versioned<std::map<Key, Value, Compare, Allocator>>
-{
-  ///
-  /// true if a key or a value is one.
-  ///
-  static constexpr auto value = variant_with_versioned<Key>::value || variant_with_versioned<Value>::value;
-};
-
-///
-/// \see variant_with_versioned
-///
-template<typename Key, typename Value, typename Hash, typename Equal, typename Allocator>
-struct variant_with_versioned<std::unordered_map<Key, Value, Hash, Equal, Allocator>>
-{
-  ///
-  /// true if a key or a value is one.
-  ///
-  static constexpr auto value = variant_with_versioned<Key>::value || variant_with_versioned<Value>::value;
-};
 
 ///
 /// Reads a table as a versioned configuration of T.

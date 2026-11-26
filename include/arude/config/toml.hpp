@@ -13,15 +13,16 @@
 /// detail::write_root(), which drive reflect-cpp's parser the way
 /// rfl/toml/read.hpp and write.hpp do: they build libarude's own reader and
 /// writer and call the Parser with them, so the specialisations in
-/// versioned.hpp and toml_parsers.hpp are the ones chosen. The root itself
-/// is read through the versioned specialisation, so the root and its
-/// versioned members share one version rule.
+/// versioned.hpp, tagged_union.hpp and toml_parsers.hpp are the ones
+/// chosen. The root itself is read through the versioned specialisation, so
+/// the root and its versioned members share one version rule.
 ///
 #pragma once
 
 #include "arude/config/common.hpp"
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
+#include "arude/config/tagged_union.hpp"
 #include "arude/config/toml_parsers.hpp"
 #include "arude/config/toml_reader.hpp"
 #include "arude/config/toml_time.hpp"
@@ -119,7 +120,7 @@ template<configuration_c T, typename... Ps>
 /// \throws exception_t With invalid_payload if the document does not read as
 ///         T, a required field or a version key included, or
 ///         invalid_version if it declares a version this build cannot load
-///         under the policy.
+///         under the policy or a tagged union tag no alternative answers to.
 ///
 template<configuration_c T>
 [[nodiscard]] auto read_root(
@@ -136,9 +137,14 @@ template<configuration_c T>
 /// otherwise read is replaced, but newer data is not. reflect-cpp keeps
 /// reading a struct's other fields after one fails or is missing, so a newer
 /// member is found beside a typo; a versioned table that declares no version
-/// is still read for what it holds, so a newer member inside it is found. It
-/// stops reading an array at its first bad element, a missing field included,
-/// so a newer element after one in the same array is not.
+/// is still read for what it holds, and so is every element of an array
+/// after one that fails, so a newer member inside either is found. An array
+/// element past the end of a std::tuple, std::pair or std::array is not
+/// read, as the type has no field for it and reflect-cpp refuses the array
+/// anyway. A tagged union's tag that names no alternative counts as newer,
+/// as it is what an alternative a newer build added looks like; the
+/// alternatives it does not name are not read, as they hold nothing of the
+/// table.
 ///
 /// \tparam T The root's configuration type.
 /// \param document The table. Retained by the read, not after it.
@@ -214,11 +220,12 @@ auto read_root(
   const std::source_location loc) -> T
 {
   static_assert(
-    !variant_with_versioned<T>::value,
-    "arude::config: versioned<> cannot sit inside a std::variant, rfl::Variant or rfl::TaggedUnion "
-    "alternative. One table cannot be read as two versions at once: which version applied would depend on "
-    "which alternative accepted the table, and a newer version could be silently overwritten. Move the "
-    "versioned member out of the variant, or keep every alternative free of versioned<> members at any depth.");
+    !contains_versioned_or_tagged<T>::value || !contains_untagged_variant<T>::value,
+    "arude::config: a configuration that contains a versioned<> member or an rfl::TaggedUnion cannot also "
+    "contain a std::variant, an rfl::Variant or an rfl::Result, at any depth. reflect-cpp reads an untagged "
+    "variant by taking the first alternative that parses, so a newer version reached through a later "
+    "alternative could be misread or silently overwritten. Use an rfl::TaggedUnion for the choice, whose tag "
+    "picks the one alternative read.");
 
   // Processors are compile-time, so the read with rfl::NoExtraFields and the
   // one without are both instantiated here, and the format picks at run time.
@@ -257,11 +264,12 @@ template<configuration_c T>
 auto write_root(const T& value, const std::source_location loc) -> toml::table
 {
   static_assert(
-    !variant_with_versioned<T>::value,
-    "arude::config: versioned<> cannot sit inside a std::variant, rfl::Variant or rfl::TaggedUnion "
-    "alternative. One table cannot be written as two versions at once: which version applied would depend on "
-    "which alternative accepted the table, and a newer version could be silently overwritten. Move the "
-    "versioned member out of the variant, or keep every alternative free of versioned<> members at any depth.");
+    !contains_versioned_or_tagged<T>::value || !contains_untagged_variant<T>::value,
+    "arude::config: a configuration that contains a versioned<> member or an rfl::TaggedUnion cannot also "
+    "contain a std::variant, an rfl::Variant or an rfl::Result, at any depth. reflect-cpp reads an untagged "
+    "variant by taking the first alternative that parses, so a newer version reached through a later "
+    "alternative could be misread or silently overwritten. Use an rfl::TaggedUnion for the choice, whose tag "
+    "picks the one alternative read.");
 
   auto document = toml::table{};
   auto context = write_context{};
@@ -310,7 +318,8 @@ template<configuration_c T>
 /// \return The parsed configuration.
 /// \throws exception_t With invalid_payload if the text does not parse or
 ///         lacks a field that is not a std::optional, or invalid_version if
-///         it declares a version other than T's.
+///         it declares a version other than T's or a tagged union tag no
+///         alternative answers to.
 ///
 template<configuration_c T>
 [[nodiscard]] auto from_toml(std::string_view text, std::source_location loc = std::source_location::current()) -> T;
@@ -325,7 +334,8 @@ template<configuration_c T>
 /// \return The configuration, migrated to To.
 /// \throws exception_t With invalid_payload if the text does not parse or
 ///         lacks a field that is not a std::optional, or invalid_version if
-///         it declares a version this build has no type for.
+///         it declares a version this build has no type for or a tagged union
+///         tag no alternative answers to.
 ///
 template<configuration_c To>
 [[nodiscard]] auto from_toml_migrated(std::string_view text, std::source_location loc = std::source_location::current())

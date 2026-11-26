@@ -49,9 +49,24 @@
 /// what the underlying type holds, and rfl::config::enum_range<E> where that
 /// is specialised.
 ///
+/// A configuration type that contains a versioned<> member or an
+/// rfl::TaggedUnion anywhere must not also contain a std::variant, an
+/// rfl::Variant or an rfl::Result anywhere: that is a compile error in
+/// read_root() and write_root(). reflect-cpp reads an untagged variant as the
+/// first alternative that accepts the table, so a newer version reached
+/// through a later one could be misread or overwritten; rfl::TaggedUnion is
+/// the way to have a choice in a versioned configuration, and its tag picks
+/// the one alternative read. A type with none of them may use variants
+/// freely. A tag that names no alternative is taken for one a newer build
+/// added, so it is refused on load and store() does not write over it; see
+/// arude/config/tagged_union.hpp.
+///
 /// The support builds on reflect-cpp's implementation as well as its public
 /// API: it specialises rfl::parsing::Parser and rfl::parsing::MapReader for its
-/// own reader and writer. reflect-cpp is pinned for that reason, and an
+/// own reader and writer, hides the reader's read_array() over the internal
+/// rfl::parsing::VectorReader, ArrayReader and TupleReader, and writes a
+/// tagged union through rfl::internal's tag helpers and reflect-cpp's
+/// TaggedUnionWrapper types. reflect-cpp is pinned for that reason, and an
 /// upgrade of it is a change to test on its own; see README.md.
 ///
 
@@ -62,6 +77,7 @@
 #include "arude/config/config_member.hpp"
 #include "arude/config/load_policy.hpp"
 #include "arude/config/migration.hpp"
+#include "arude/config/tagged_union.hpp"
 #include "arude/config/toml.hpp"
 #include "arude/config/toml_parsers.hpp"
 #include "arude/config/toml_reader.hpp"

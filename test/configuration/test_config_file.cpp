@@ -18,6 +18,7 @@
 #include "test/helpers/temp_file.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -357,6 +358,76 @@ struct layered
   /// The layered member, carrying its own version.
   ///
   arude::config::versioned<layer_v2> layer;
+};
+
+///
+/// A struct an array holds, with a versioned member beside a plain field.
+///
+struct slot
+{
+  ///
+  /// A weight.
+  ///
+  std::int32_t weight = 1;
+
+  ///
+  /// A versioned member.
+  ///
+  arude::config::versioned<inner_v1> inner;
+};
+
+///
+/// A root holding versioned members in arrays, bare and inside a struct.
+///
+struct racked
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// Structs holding a versioned member, in a vector.
+  ///
+  std::vector<slot> slots;
+
+  ///
+  /// Versioned members in a std::array, which reflect-cpp reads apart from a
+  /// vector.
+  ///
+  std::array<arude::config::versioned<inner_v1>, 2> pair;
+};
+
+///
+/// A root holding versioned members in tuples, which reflect-cpp reads as
+/// arrays of mixed elements.
+///
+struct tupled
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// A count and a versioned member, as a std::tuple.
+  ///
+  std::tuple<std::int32_t, arude::config::versioned<inner_v1>> counted;
+
+  ///
+  /// A count and a versioned member, as a std::pair.
+  ///
+  std::pair<std::int32_t, arude::config::versioned<inner_v1>> paired;
 };
 
 ///
@@ -837,25 +908,27 @@ SCENARIO("a store refuses to write over what a newer build wrote, and replaces a
 
     WHEN("the newer value is an array element after one that lacks a field")
     {
-      // The probe stops reading an array at its first element that does not
-      // read, and an element missing a required field is one: the newer
-      // element after it is not seen, so the source is replaced.
+      // An element missing a required field fails the array, and the probe
+      // reads on past it to the newer element.
       store["app"] = arude::config::as_bytes(
         std::string{"version = 1\nname = \"app\"\n[network]\nversion = 2\nhostname = \"now\"\nport = 80\n"
                     "[network.inner]\nversion = 1\ndepth = 7\n"
                     "[[network.extras]]\nversion = 1\n"
-                    "[[network.extras]]\nversion = 2\ndepth = 8\n"});
+                    "[[network.extras]]\nversion = 2\ndepth = 8\n"
+                    "[extra]\nversion = 1\ndepth = 3\n"});
+      const auto before = store.at("app");
 
-      file.store();
+      const auto load_failure =
+        config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.load(); });
+      const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
 
-      THEN("the store goes through, and the cached root loads back")
+      THEN("the load still fails on the first element, and the store is refused, leaving the source untouched")
       {
-        auto second = arude::config::config_file<config_file_test::app, config_test::memory_transport>{
-          config_test::memory_transport{"app", store}
-        };
-        second.load();
-
-        REQUIRE(second.get().name == file.get().name);
+        REQUIRE(load_failure.data() == arude::config::config_error::invalid_payload);
+        REQUIRE(load_failure.str().contains("'depth'"));
+        REQUIRE(failure.data() == arude::config::config_error::invalid_version);
+        REQUIRE(failure.str().contains("inner_v1 is version 2, newer than version 1"));
+        REQUIRE(store.at("app") == before);
       }
     }
 
@@ -892,6 +965,164 @@ SCENARIO("a store refuses to write over what a newer build wrote, and replaces a
         second.load();
 
         REQUIRE(second.get().name == file.get().name);
+      }
+    }
+  }
+}
+
+SCENARIO("a store probe reads every element of an array past one that fails", "[config][config_file]")
+{
+  GIVEN("a file with a cached value, over a store")
+  {
+    auto store = config_test::memory_transport::store_t{};
+
+    auto file = arude::config::config_file<config_file_test::racked, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
+    file.set(config_file_test::racked{});
+
+    const auto pair_block = std::string_view{"[[pair]]\nversion = 1\ndepth = 7\n[[pair]]\nversion = 1\ndepth = 7\n"};
+
+    WHEN("a struct in a vector holds a newer member, after a struct that does not read")
+    {
+      store["app"] = arude::config::as_bytes(
+        std::format(
+          "version = 1\n"
+          "[[slots]]\nweight = \"heavy\"\n[slots.inner]\nversion = 1\ndepth = 7\n"
+          "[[slots]]\nweight = 2\n[slots.inner]\nversion = 2\ndepth = 8\n"
+          "{}",
+          pair_block));
+      const auto before = store.at("app");
+
+      const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
+
+      THEN("the store is refused as an invalid_version, and the source is untouched")
+      {
+        REQUIRE(failure.data() == arude::config::config_error::invalid_version);
+        REQUIRE(failure.str().contains("inner_v1 is version 2, newer than version 1"));
+        REQUIRE(store.at("app") == before);
+      }
+    }
+
+    WHEN("a std::array holds a newer element, after one that does not read")
+    {
+      store["app"] = arude::config::as_bytes(
+        std::string{"version = 1\nslots = []\n"
+                    "[[pair]]\nversion = 1\ndepth = \"deep\"\n[[pair]]\nversion = 2\ndepth = 8\n"});
+      const auto before = store.at("app");
+
+      const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
+
+      THEN("the store is refused as an invalid_version, and the source is untouched")
+      {
+        REQUIRE(failure.data() == arude::config::config_error::invalid_version);
+        REQUIRE(failure.str().contains("inner_v1 is version 2, newer than version 1"));
+        REQUIRE(store.at("app") == before);
+      }
+    }
+
+    WHEN("the elements after one that does not read are all current")
+    {
+      store["app"] = arude::config::as_bytes(
+        std::format(
+          "version = 1\n"
+          "[[slots]]\nweight = \"heavy\"\n[slots.inner]\nversion = 1\ndepth = 7\n"
+          "[[slots]]\nweight = 2\n[slots.inner]\nversion = 1\ndepth = 8\n"
+          "{}",
+          pair_block));
+
+      file.store();
+
+      THEN("the source is replaced by the cached value, which loads back")
+      {
+        auto second = arude::config::config_file<config_file_test::racked, config_test::memory_transport>{
+          config_test::memory_transport{"app", store}
+        };
+        second.load();
+
+        REQUIRE(second.get().slots.empty());
+      }
+    }
+  }
+
+  GIVEN("a file with a cached value, over a store holding tuples")
+  {
+    auto store = config_test::memory_transport::store_t{};
+
+    auto file = arude::config::config_file<config_file_test::tupled, config_test::memory_transport>{
+      config_test::memory_transport{"app", store}
+    };
+    file.set(config_file_test::tupled{});
+
+    WHEN("a std::tuple holds a newer element, after one that does not read")
+    {
+      store["app"] = arude::config::as_bytes(
+        std::string{"version = 1\n"
+                    "counted = [\"many\", {version = 2, depth = 8}]\n"
+                    "paired = [1, {version = 1, depth = 7}]\n"});
+      const auto before = store.at("app");
+
+      const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
+
+      THEN("the store is refused as an invalid_version, and the source is untouched")
+      {
+        REQUIRE(failure.data() == arude::config::config_error::invalid_version);
+        REQUIRE(failure.str().contains("inner_v1 is version 2, newer than version 1"));
+        REQUIRE(store.at("app") == before);
+      }
+    }
+
+    WHEN("a std::pair holds a newer element, after one that does not read")
+    {
+      store["app"] = arude::config::as_bytes(
+        std::string{"version = 1\n"
+                    "counted = [1, {version = 1, depth = 7}]\n"
+                    "paired = [\"many\", {version = 2, depth = 8}]\n"});
+      const auto before = store.at("app");
+
+      const auto failure = config_file_test::failure_of<arude::config::exception_t>([&file] -> void { file.store(); });
+
+      THEN("the store is refused as an invalid_version, and the source is untouched")
+      {
+        REQUIRE(failure.data() == arude::config::config_error::invalid_version);
+        REQUIRE(failure.str().contains("inner_v1 is version 2, newer than version 1"));
+        REQUIRE(store.at("app") == before);
+      }
+    }
+
+    WHEN("the element after one that does not read is current")
+    {
+      store["app"] = arude::config::as_bytes(
+        std::string{"version = 1\n"
+                    "counted = [\"many\", {version = 1, depth = 8}]\n"
+                    "paired = [\"many\", {version = 1, depth = 8}]\n"});
+
+      file.store();
+
+      THEN("the source is replaced by the cached value, which loads back")
+      {
+        auto second = arude::config::config_file<config_file_test::tupled, config_test::memory_transport>{
+          config_test::memory_transport{"app", store}
+        };
+        second.load();
+
+        REQUIRE(std::get<1>(second.get().counted).value().depth == 7);
+      }
+    }
+
+    WHEN("a tuple holds an element past its own size, after one that does not read")
+    {
+      store["app"] = arude::config::as_bytes(
+        std::string{"version = 1\n"
+                    "counted = [\"many\", {version = 1, depth = 7}, {version = 9, depth = 9}]\n"
+                    "paired = [1, {version = 1, depth = 7}]\n"});
+      const auto before = store.at("app");
+
+      file.store();
+
+      THEN("the tuple has no field for it, so reflect-cpp refuses the array and the store replaces the source")
+      {
+        REQUIRE(store.at("app") != before);
       }
     }
   }

@@ -82,16 +82,35 @@ version = 1
 
 The struct conversion is reflect-cpp's, pinned at 0.23.0 with toml++ 3.4.0 in
 `CMakeLists.txt`. libarude builds on more than its public API: it specialises
-`rfl::parsing::Parser` for `versioned<>`, enumerations, durations, and dates and
-times; replaces the internal `rfl::parsing::MapReader`; derives its TOML reader
-and writer from reflect-cpp's; and names `rfl::internal`, and the enchantum copy
-reflect-cpp bundles, in a few places. Those are reflect-cpp's implementation, so
-treat a reflect-cpp upgrade as a change of its own: bump the version and run the
-whole suite, the `test/configuration/test_toml_*` files above all.
+`rfl::parsing::Parser` for `versioned<>`, `rfl::TaggedUnion`, enumerations,
+durations, and dates and times; replaces the internal `rfl::parsing::MapReader`;
+derives its TOML reader and writer from reflect-cpp's, hiding the reader's
+`read_array()` over the internal `VectorReader`, `ArrayReader` and
+`TupleReader`; and names `rfl::internal`, and the enchantum copy reflect-cpp
+bundles, in a few places. Those are reflect-cpp's implementation, so treat a
+reflect-cpp upgrade as a change of its own: bump the version and run the whole
+suite, the `test/configuration/test_toml_*` files above all.
 
-One of its limits shows through: a `std::variant` alternative cannot hold a
-`versioned<>` member, as reflect-cpp takes the first alternative that parses,
-and that is a compile error that says so.
+One of its limits shows through: a configuration that contains a
+`versioned<>` member or an `rfl::TaggedUnion` anywhere cannot also contain a
+`std::variant`, an `rfl::Variant` or an `rfl::Result` anywhere, at any depth,
+because reflect-cpp takes the first alternative that parses; that is a
+compile error that says so, and an `rfl::TaggedUnion` is the way to have a
+choice in a versioned configuration. Give each alternative an explicit
+`rfl::Literal` tag field; one tagged by its type name has no field for the
+tag, so `reject_unknown_fields` refuses it. A tag that names no alternative is
+taken for one a newer build added: the load is refused, and `store()` does
+not write over it.
+The check cannot see into a class read through a custom
+`rfl::parsing::Parser` specialisation, so a variant hidden in one is not
+refused.
+
+```cpp
+struct circle { rfl::Literal<"circle"> kind; arude::config::versioned<shape_v2> shape; };
+struct square { rfl::Literal<"square"> kind; std::int32_t side = 0; };
+
+rfl::TaggedUnion<"kind", circle, square> outline = square{};
+```
 
 ## Building
 

@@ -659,11 +659,15 @@ namespace arude::config
 /// result in under one lock, all or nothing; a load that fails changes
 /// nothing, and a load never writes. store() probes the source first and
 /// refuses with invalid_version over a file a newer build wrote, root or any
-/// versioned member, so that build's data is not lost; a source this build
-/// cannot otherwise read, not TOML or not a T, is replaced. overwrite() is
-/// the deliberate way past the refusal. Stores are serialised,
-/// so the newest snapshot is written last. get() and set() never wait for
-/// I/O.
+/// versioned member, an array element after one that does not read
+/// included, or a tagged union whose tag names no alternative this build
+/// knows, so that build's data is not lost; a source this build cannot
+/// otherwise read, not TOML or not a T, is replaced. An array element past
+/// the size of a std::tuple, std::pair or std::array is not read, as the
+/// type has no field for it and reflect-cpp refuses the array anyway.
+/// overwrite() is the deliberate way past the refusal. Stores are
+/// serialised, so the newest snapshot is written last. get() and set() never
+/// wait for I/O.
 ///
 /// \tparam T The root's configuration type, normally the newest version of it.
 /// \tparam Tr The transport type.
@@ -802,8 +806,9 @@ public: // Methods
   /// \throws exception_t With invalid_payload if the source does not read
   ///         as T, a required field or a version key missing, invalid_version
   ///         if it declares a version this build cannot load under the
-  ///         policy, not_found where the source is missing without create,
-  ///         or io_error where the transport fails.
+  ///         policy or a tagged union tag no alternative answers to,
+  ///         not_found where the source is missing without create, or
+  ///         io_error where the transport fails.
   ///
   auto
   load(load_policy policy = load_policy::upgrade_to_current, std::source_location loc = std::source_location::current())
