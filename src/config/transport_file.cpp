@@ -52,18 +52,20 @@ namespace
 #if (defined _WIN32)
 
 ///
-/// How often the classic (non-POSIX) rename is tried, and how long to wait
-/// between tries: about a tenth of a second in all. Only the fallback path
-/// needs it: without POSIX semantics a file cannot be renamed over while
-/// another handle has it open, and a foreign holder may let go at any moment.
-/// The POSIX path never retries.
+/// How long the classic (non-POSIX) rename is tried for, and how long to wait
+/// between tries. Only the fallback path needs it: without POSIX semantics a
+/// file cannot be renamed over while another handle has it open, and a
+/// foreign holder may let go at any moment. The POSIX path never retries.
+/// Bounded by time rather than by a count of tries, as a sleep on Windows
+/// lasts at least one timer tick, about 15.6 ms by default, however short
+/// the pause asked for.
 ///
-constexpr auto transient_attempts = 50;
+constexpr auto transient_budget = std::chrono::milliseconds{100};
 
 ///
-/// \see transient_attempts
+/// \see transient_budget
 ///
-constexpr auto transient_pause = std::chrono::milliseconds{2};
+constexpr auto transient_pause = std::chrono::milliseconds{1};
 
 ///
 /// Owns a Win32 file handle, closing it when it goes away, so no raw
@@ -222,21 +224,21 @@ constexpr auto rename_posix_semantics = DWORD{0x2};
     return posix;
   }
 
-  auto error = DWORD{ERROR_SUCCESS};
+  const auto deadline = std::chrono::steady_clock::now() + transient_budget;
 
-  for(auto attempt = 0; attempt < transient_attempts; ++attempt)
+  for(;;)
   {
-    error = attempt_rename(FileRenameInfo, rename_replace_if_exists);
+    const auto error = attempt_rename(FileRenameInfo, rename_replace_if_exists);
 
-    if(error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION)
+    if(
+      (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION) ||
+      std::chrono::steady_clock::now() >= deadline)
     {
       return error;
     }
 
     std::this_thread::sleep_for(transient_pause);
   }
-
-  return error;
 }
 
 ///
@@ -250,10 +252,19 @@ auto replace_file(
   const std::span<const std::byte> bytes,
   const std::source_location loc) -> void
 {
-  // DELETE, because the rename goes through this handle. The temporary's
-  // random name is held by nobody else, so no sharing is granted.
-  const auto file = win_handle{
-    ::CreateFileW(temporary.c_str(), GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr)};
+  // DELETE, because the rename goes through this handle. Every share mode,
+  // because after the rename this handle is open on the target itself until
+  // it closes: sharing nothing would fail a load reading the target, and a
+  // second store replacing it, in that moment. Before the rename the random
+  // name is held by nobody else, so the sharing costs nothing.
+  const auto file = win_handle{::CreateFileW(
+    temporary.c_str(),
+    GENERIC_WRITE | DELETE,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    nullptr,
+    CREATE_NEW,
+    FILE_ATTRIBUTE_NORMAL,
+    nullptr)};
 
   if(!file.valid())
   {
@@ -272,7 +283,8 @@ auto replace_file(
   // can get in the way; called on every failure below.
   const auto discard = [&file]() -> void
   {
-    const auto disposition = FILE_DISPOSITION_INFO{TRUE};
+    // Not const: the call takes its buffer as a plain LPVOID.
+    auto disposition = FILE_DISPOSITION_INFO{TRUE};
     ::SetFileInformationByHandle(file.get(), FileDispositionInfo, &disposition, sizeof(disposition));
   };
 

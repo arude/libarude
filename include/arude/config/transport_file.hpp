@@ -63,12 +63,15 @@ namespace arude::config::detail
 /// empty or part-way through being written. A symbolic link is followed: the
 /// file it names is replaced, and the link stays.
 ///
-/// The replacement is a new file. It takes the old file's permissions, but
-/// not its owner, and a hard link to the old file keeps the old contents. On
-/// Windows the replace uses POSIX rename semantics through a handle that
-/// shares deletion, so a reader holding the file open does not stop it; only
-/// where the filesystem cannot replace an open file at all is the rename
-/// tried again for about a tenth of a second before the write fails.
+/// The replacement is a new file. Elsewhere than on Windows it takes the old
+/// file's permissions, but not its owner; on Windows it inherits the
+/// directory's access control, as any new file there does. A hard link to the
+/// old file keeps the old contents. On Windows the rename has POSIX
+/// semantics, so a reader that shares deletion, as read_file does, does not
+/// stop it, while a handle that does not share deletion fails the write at
+/// once. Only where POSIX semantics are not available (Windows before 1607,
+/// FAT, some network shares) is a rename refused by an open handle tried
+/// again, for about a tenth of a second.
 ///
 /// \param path File to write.
 /// \param bytes Bytes to write. Not retained.
