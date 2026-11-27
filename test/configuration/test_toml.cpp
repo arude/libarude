@@ -70,11 +70,6 @@ struct narrow
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// A count that holds 0 to 255.
   ///
   std::uint8_t count = 0;
@@ -91,11 +86,6 @@ struct app
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the file.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// Name this configuration is known by.
   ///
   std::string name = "example";
@@ -110,11 +100,6 @@ struct schedule
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the file.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// A calendar day, in the pattern the type names. No initialiser, so a
@@ -143,11 +128,6 @@ struct proxy
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the file.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// Port to reach it on, where it is not the default one.
@@ -180,11 +160,6 @@ struct web
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the file.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The hosts, by name.
@@ -243,11 +218,6 @@ struct rich
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the file.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// A renamed field.
@@ -378,7 +348,6 @@ SCENARIO("a configuration survives being rendered and parsed back", "[config][to
         REQUIRE(read.retries == written.retries);
         REQUIRE(read.endpoint == written.endpoint);
         REQUIRE(read.secret == written.secret);
-        REQUIRE(read.version == arude::config::version_of<test_helpers::config_test_t>());
       }
     }
   }
@@ -404,18 +373,20 @@ SCENARIO("bytes are rendered as base64 text", "[config][toml]")
 
 SCENARIO("the version rendered is the type's own", "[config][toml]")
 {
-  GIVEN("a configuration whose version member has been tampered with")
+  GIVEN("a configuration of each version, neither declaring a version member")
   {
-    auto written = toml_test::make_current();
-    written.version = 99;
+    const auto current = toml_test::make_current();
+    const auto older = test_helpers::config_test_v1{.name = "old"};
 
-    WHEN("it is rendered and parsed again")
+    WHEN("each is rendered")
     {
-      const auto read = arude::config::from_toml<test_helpers::config_test_t>(arude::config::to_toml(written));
+      const auto current_text = arude::config::to_toml(current);
+      const auto older_text = arude::config::to_toml(older);
 
-      THEN("the tampered version did not survive")
+      THEN("each text declares the config_version of its type")
       {
-        REQUIRE(read.version == arude::config::version_of<test_helpers::config_test_t>());
+        REQUIRE(arude::config::toml_version(current_text) == arude::config::version_of<test_helpers::config_test_v2>());
+        REQUIRE(arude::config::toml_version(older_text) == arude::config::version_of<test_helpers::config_test_v1>());
       }
     }
   }
@@ -440,7 +411,7 @@ SCENARIO("older text is migrated where the caller asks for it", "[config][toml]"
       {
         REQUIRE(read.name == "old");
         REQUIRE(read.retries == 3);
-        REQUIRE(read.version == arude::config::version_of<test_helpers::config_test_t>());
+        REQUIRE(read.endpoint == test_helpers::config_test_t{}.endpoint);
       }
     }
 
@@ -894,14 +865,19 @@ SCENARIO("libarude's conversion of a configuration matches reflect-cpp's own", "
   {
     const auto value = toml_test::rich{};
 
-    THEN("to_toml renders it exactly as rfl::toml::write does")
+    // reflect-cpp writes no version key, as the type has no member for one;
+    // the key is the one thing libarude adds to what it writes.
+    auto expected = toml::parse(rfl::toml::write(value));
+    expected.insert("version", std::int64_t{arude::config::version_of<toml_test::rich>()});
+
+    THEN("to_toml renders it exactly as rfl::toml::write does, with the version key added")
     {
-      REQUIRE(arude::config::to_toml(value) == rfl::toml::write(value));
+      REQUIRE(arude::config::to_toml(value) == arude::config::detail::render_toml(expected));
     }
 
     THEN("from_toml reads back exactly what rfl::toml::read does")
     {
-      const auto text = rfl::toml::write(value);
+      const auto text = arude::config::detail::render_toml(expected);
       const auto ours = arude::config::from_toml<toml_test::rich>(text);
       const auto theirs = rfl::toml::read<toml_test::rich>(text);
 

@@ -45,13 +45,6 @@ struct config_test_v1
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  /// Initialised from config_version so the two cannot disagree; writing a
-  /// configuration stamps the type's version regardless of what this holds.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// Name this configuration is known by.
   ///
   std::string name = "arude";

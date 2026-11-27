@@ -54,11 +54,6 @@ struct vault
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the file.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The table holding the payload.
   ///
   binary_test::credentials credentials;

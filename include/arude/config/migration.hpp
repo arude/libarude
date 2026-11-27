@@ -14,10 +14,10 @@
 ///
 ///   - Every version is a separate type in its own header, and never edited
 ///     again once released: version 1's type stays what version 1 meant.
-///   - Each type states its version twice over: as config_version, known at
-///     compile time, and as the version data member, which is what ends up in
-///     the file. The member is initialised from the constant, so the two
-///     cannot drift apart.
+///   - Each type states its version once, as config_version, known at
+///     compile time. The constant is not a data member, so reflect-cpp never
+///     sees it: arude::config writes it as the table's version key itself and
+///     takes the key out of the table again before the rest is read.
 ///   - Version n names version n-1 as previous_t and declares upgrade() and
 ///     downgrade() for the step between them. Nothing needs to know about the
 ///     whole chain, and version n-1 never learns that n exists.
@@ -59,14 +59,14 @@ using version_t = std::uint32_t;
 ///
 /// A versioned configuration type.
 /// An aggregate, so reflect-cpp can reflect its public data members, carrying
-/// its version as both a compile-time constant and a data member.
+/// its version as a compile-time constant, config_version. The file's version
+/// key is written and read by arude::config from that constant.
 ///
 /// \tparam T Type to test.
 ///
 template<typename T>
-concept configuration_c = std::is_aggregate_v<T> && std::default_initializable<T> && requires(const T& val) {
+concept configuration_c = std::is_aggregate_v<T> && std::default_initializable<T> && requires {
   { T::config_version } -> std::convertible_to<version_t>;
-  { val.version } -> std::convertible_to<version_t>;
 };
 
 ///

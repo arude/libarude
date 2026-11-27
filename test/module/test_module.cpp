@@ -463,11 +463,6 @@ struct net_v1
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The host, as version 1 names it.
   ///
   std::string host = "v1-host";
@@ -487,11 +482,6 @@ struct net_v2
   /// \see net_v1::config_version
   ///
   static constexpr auto config_version = arude::config::version_t{2};
-
-  ///
-  /// \see net_v1::version
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The host, as version 2 names it.
@@ -541,11 +531,6 @@ struct app_config_v1
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// Name this configuration is known by.
   ///
   std::string name = "module";
@@ -580,11 +565,6 @@ struct app_config_v2
   /// \see app_config_v1::config_version
   ///
   static constexpr auto config_version = arude::config::version_t{2};
-
-  ///
-  /// \see app_config_v1::version
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// \see app_config_v1::name
@@ -681,7 +661,7 @@ SCENARIO("the module exports the configuration interface", "[module][config]")
 
     THEN("a migration runs, so the steps came across with the types")
     {
-      REQUIRE(arude::config::migrate<module_test::app_config_v2>(module_test::app_config_v1{}).version == 2);
+      REQUIRE(arude::config::migrate<module_test::app_config_v2>(module_test::app_config_v1{}).endpoint == "localhost");
     }
   }
 }
@@ -709,9 +689,7 @@ SCENARIO("a module consumer reads a versioned member", "[module][config]")
       THEN("what version 1 carried came forward, the member's rename included")
       {
         REQUIRE(read.name == "old");
-        REQUIRE(read.version == arude::config::version_of<module_test::app_config_t>());
         REQUIRE(read.network.value().hostname == "old-host");
-        REQUIRE(read.network.value().version == arude::config::version_of<module_test::net_v2>());
       }
     }
   }

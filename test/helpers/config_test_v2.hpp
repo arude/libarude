@@ -45,11 +45,6 @@ struct config_test_v2
   static constexpr auto config_version = arude::config::version_t{2};
 
   ///
-  /// \see config_test_v1::version
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// \see config_test_v1::name
   ///
   std::string name = "arude";

@@ -63,11 +63,6 @@ struct shape_v1
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The size, as version 1 names it.
   ///
   std::int32_t r = 1;
@@ -94,11 +89,6 @@ struct shape_v2
   /// \return true if every field is equal.
   ///
   [[nodiscard]] auto operator==(const shape_v2& other) const -> bool = default;
-
-  ///
-  /// \see shape_v1::version
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The size, as version 2 names it.
@@ -207,11 +197,6 @@ struct basic_drawing
   [[nodiscard]] auto operator==(const basic_drawing& other) const -> bool = default;
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The outline.
   ///
   Outline outline = square{};
@@ -236,11 +221,6 @@ struct gallery
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The outlines.
@@ -300,11 +280,6 @@ struct sketch
   /// \return true if every field is equal.
   ///
   [[nodiscard]] auto operator==(const sketch& other) const -> bool = default;
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The stroke.
@@ -424,11 +399,6 @@ struct result_drawing
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The result.
   ///
   rfl::Result<holder> result = rfl::error("none");
@@ -479,11 +449,6 @@ struct grove
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The tree.
   ///
   tree trunk;
@@ -504,11 +469,6 @@ struct choice
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The variant.
@@ -598,11 +558,6 @@ struct wrapped_drawing
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The variant.

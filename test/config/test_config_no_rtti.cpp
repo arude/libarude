@@ -52,8 +52,8 @@ SCENARIO("a config_file loads, migrates and stores without RTTI", "[config][conf
 
       THEN("the root is migrated to the current version")
       {
-        REQUIRE(file.get().version == arude::config::version_of<test_helpers::config_test_t>());
         REQUIRE(file.get().name == "without rtti");
+        REQUIRE(file.get().endpoint == test_helpers::config_test_t{}.endpoint);
       }
 
       THEN("a store writes the migrated root back")
