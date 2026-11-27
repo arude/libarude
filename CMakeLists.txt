@@ -102,7 +102,12 @@ if(NOT ARUDE_NO_CONFIG)
   # The version is what reflect-cpp 0.23.0 asks for in its vcpkg manifest.
   CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")
 
-  CPMAddPackage("gh:getml/reflect-cpp@0.23.0")
+  # Patched so that MSVC can read a struct at all; the patch says why.
+  CPMAddPackage(
+    NAME reflect-cpp
+    GITHUB_REPOSITORY getml/reflect-cpp
+    VERSION 0.23.0
+    PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/reflect-cpp-view-t-msvc.patch")
 
   # Built at our standard for the same reason Catch2 is; see the comment there.
   #

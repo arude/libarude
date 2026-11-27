@@ -81,7 +81,8 @@ version = 1
 ### reflect-cpp
 
 The struct conversion is reflect-cpp's, pinned at 0.23.0 with toml++ 3.4.0 in
-`CMakeLists.txt`. libarude builds on more than its public API: it specialises
+`CMakeLists.txt`, with one patch in `cmake/patches/` that lets MSVC read a
+struct at all. libarude builds on more than its public API: it specialises
 `rfl::parsing::Parser` for `versioned<>`, `rfl::TaggedUnion`, enumerations,
 durations, and dates and times; replaces the internal `rfl::parsing::MapReader`;
 derives its TOML reader and writer from reflect-cpp's, hiding the reader's
