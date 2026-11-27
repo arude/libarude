@@ -18,8 +18,8 @@ namespace arude::detail
 ///
 /// Finds the opening parenthesis of a signature's parameter list.
 /// That is the first '(' outside angle brackets that is not the "()" of an
-/// operator(). msvc writes the latter as "operator ()", so both spellings are
-/// skipped.
+/// operator(), and not clang's "(anonymous namespace)". msvc writes the former
+/// as "operator ()", so both spellings are skipped.
 ///
 /// \param signature Compiler-generated signature, as from std::source_location::function_name().
 /// \return Position of the '(', or std::string_view::npos if there is none.
@@ -29,8 +29,9 @@ namespace arude::detail
 ///
 /// Finds where the qualified function name starts.
 /// That is just past the last space before the parameter list that is outside
-/// angle brackets and not part of "operator ()", which drops the return type
-/// and msvc's calling convention.
+/// angle brackets and parentheses and not part of "operator ()", which drops
+/// the return type and msvc's calling convention. The parentheses are what keep
+/// the space inside clang's "(anonymous namespace)" from counting.
 ///
 /// \param signature Compiler-generated signature.
 /// \param open Position of the parameter list's '(', from parameter_list_open().
@@ -63,6 +64,8 @@ namespace arude::detail
 ///
 constexpr auto parameter_list_open(const std::string_view signature) -> std::size_t
 {
+  static constexpr auto anonymous_namespace = std::string_view{"(anonymous namespace)"};
+
   auto angle = 0;
 
   for(auto i = std::size_t{0}; i < signature.size(); ++i)
@@ -80,6 +83,15 @@ constexpr auto parameter_list_open(const std::string_view signature) -> std::siz
     }
     else if(c == '(' && angle == 0)
     {
+      // clang names an unnamed namespace in parentheses, as in
+      // "void (anonymous namespace)::f()". gcc writes "{anonymous}" and msvc
+      // "`anonymous namespace'", neither of which has a parenthesis.
+      if(signature.substr(i).starts_with(anonymous_namespace))
+      {
+        i += anonymous_namespace.size() - 1;
+        continue;
+      }
+
       const auto head = signature.substr(0, i);
 
       if(!head.ends_with("operator") && !head.ends_with("operator "))
@@ -105,16 +117,16 @@ constexpr auto qualified_name_begin(const std::string_view signature, const std:
 {
   auto depth = 0;
 
-  // Walking backwards, so '>' opens a bracket and '<' closes it.
+  // Walking backwards, so '>' and ')' open a bracket and '<' and '(' close it.
   for(auto i = open; i-- > 0;)
   {
     const auto c = signature[i];
 
-    if(c == '>' && (i == 0 || signature[i - 1] != '-'))
+    if((c == '>' && (i == 0 || signature[i - 1] != '-')) || c == ')')
     {
       ++depth;
     }
-    else if(c == '<')
+    else if(c == '<' || c == '(')
     {
       --depth;
     }
