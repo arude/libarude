@@ -34,7 +34,8 @@
 #include <rfl/Field.hpp>
 #include <rfl/Generic.hpp>
 #include <rfl/internal/has_reflector.hpp>
-#include <rfl/named_tuple_t.hpp>
+#include <rfl/internal/ptr_named_tuple_t.hpp>
+#include <rfl/internal/remove_ptrs_nt.hpp>
 #include <rfl/parsing/Parent.hpp>
 #include <rfl/parsing/Parser_base.hpp>
 #include <rfl/parsing/schema/Type.hpp>
@@ -654,6 +655,17 @@ template<typename T>
 struct untagged_variant_leaf : std::bool_constant<is_untagged_variant_v<T>>
 {};
 
+///
+/// The fields of a struct reflect-cpp reflects, as an rfl::NamedTuple of
+/// their declared names and types. What rfl::named_tuple_t gives without
+/// processors, built without its detour through rfl::view_t: that takes the
+/// decltype of a function template whose return type is deduced, which MSVC
+/// refuses as a template argument.
+/// \tparam T The struct.
+///
+template<typename T>
+using reflected_fields_t = typename rfl::internal::remove_ptrs_nt<rfl::internal::ptr_named_tuple_t<T>>::NamedTupleType;
+
 template<template<typename> class Leaf, typename Held, std::size_t Depth>
 struct search_each;
 
@@ -706,7 +718,7 @@ struct search_each<Leaf, std::tuple<Held...>, Depth> : std::disjunction<search<L
 
 /// Reflects a struct into its fields and searches each, where reflect-cpp
 /// reads them field by field. A partial specialisation rather than an if
-/// constexpr branch, so rfl::named_tuple_t is never named for a type that is
+/// constexpr branch, so reflected_fields_t is never named for a type that is
 /// not a struct reflect-cpp reflects.
 ///
 /// \tparam Leaf The predicate.
@@ -719,7 +731,7 @@ struct search_reflected : std::false_type
 
 /// \see search_reflected
 template<template<typename> class Leaf, typename T, std::size_t Depth>
-struct search_reflected<Leaf, T, Depth, true> : search_named_tuple<Leaf, rfl::named_tuple_t<T>, Depth>
+struct search_reflected<Leaf, T, Depth, true> : search_named_tuple<Leaf, reflected_fields_t<T>, Depth>
 {};
 
 /// Folds search over the fields of a reflected type.

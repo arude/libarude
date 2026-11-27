@@ -57,7 +57,6 @@
 #include <rfl/internal/make_tag.hpp>
 #include <rfl/internal/StringLiteral.hpp>
 #include <rfl/internal/tag_t.hpp>
-#include <rfl/named_tuple_t.hpp>
 #include <rfl/parsing/Parser_base.hpp>
 #include <rfl/parsing/schema/Type.hpp>
 #include <rfl/parsing/TaggedUnionWrapper.hpp>
@@ -162,7 +161,8 @@ public: // Typedefs
   /// \tparam Alternative The alternative.
   ///
   template<typename Alternative>
-  static constexpr auto holds_tag_v = named_tuple_t<Alternative>::Names::template contains<Discriminator>();
+  static constexpr auto holds_tag_v =
+    arude::config::detail::reflected_fields_t<Alternative>::Names::template contains<Discriminator>();
 
   ///
   /// What an alternative is written as: itself where it holds its tag, and
