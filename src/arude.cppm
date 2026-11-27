@@ -35,6 +35,7 @@ module;
 #include "arude/function_signature.hpp"
 #include "arude/hello_world.hpp"
 #include "arude/log.hpp"
+#include "arude/log_config.hpp"
 #include "arude/non_owning_t.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"
@@ -142,8 +143,11 @@ using ::arude::hello_world;
 // come across a module boundary at all and a consumer that wants them has to
 // include arude/log.hpp the usual way.
 using ::arude::log;
+using ::arude::log_config;
 using ::arude::log_global_log_level;
 using ::arude::log_level;
+using ::arude::log_record;
+using ::arude::log_session;
 
 using ::arude::non_owning_t;
 using ::arude::noncopyable;
@@ -178,6 +182,7 @@ export namespace arude::detail
 {
 
 using ::arude::detail::exception_base_formatter_t;
+using ::arude::detail::log_callback;
 using ::arude::detail::source_location_formatter_t;
 
 } // namespace arude::detail
