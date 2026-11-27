@@ -24,7 +24,8 @@
 /// subsystem through a handle. A type states its version once, as
 /// static constexpr config_version; arude::config writes that as the table's
 /// version key and takes the key out again before reading the rest, so the
-/// type declares no member for it:
+/// type declares no member for it, and one that declares a data member called
+/// version is not a configuration_c:
 ///
 /// ```cpp
 /// auto file = arude::config::config_file<app_config, arude::config::transport_file>{

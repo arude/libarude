@@ -267,6 +267,7 @@ SCENARIO("a configuration type declares its version once", "[config][version_key
   {
     STATIC_REQUIRE(arude::config::configuration_c<version_key_test::board>);
     STATIC_REQUIRE(arude::config::configuration_c<version_key_test::tile_v2>);
+    STATIC_REQUIRE(!arude::config::detail::declares_version_member_c<version_key_test::board>);
   }
 }
 

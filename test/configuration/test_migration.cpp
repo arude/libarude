@@ -65,6 +65,40 @@ struct unlinked_v2
   static constexpr auto config_version = arude::config::version_t{2};
 };
 
+///
+/// A configuration that still declares a version data member, which would
+/// collide with the version key arude::config writes itself.
+///
+struct with_version_member
+{
+  ///
+  /// \see test_helpers::config_test_v1::config_version
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The member configuration_c refuses.
+  ///
+  arude::config::version_t version = config_version;
+};
+
+///
+/// A configuration with a static member called version, which reflect-cpp
+/// does not write and so collides with nothing.
+///
+struct with_static_version
+{
+  ///
+  /// \see test_helpers::config_test_v1::config_version
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// Not a data member of an object, so not written.
+  ///
+  static constexpr auto version = 7;
+};
+
 } // namespace migration_test
 
 } // namespace
@@ -81,6 +115,12 @@ SCENARIO("a configuration states its version", "[config][migration]")
       STATIC_REQUIRE(arude::config::version_of<test_helpers::config_test_v2>() == 2);
     }
 
+    THEN("neither declares a member for the version key, which is arude::config's")
+    {
+      STATIC_REQUIRE(!arude::config::detail::declares_version_member_c<test_helpers::config_test_v1>);
+      STATIC_REQUIRE(!arude::config::detail::declares_version_member_c<test_helpers::config_test_v2>);
+    }
+
     THEN("the current alias is the newest of them")
     {
       STATIC_REQUIRE(std::is_same_v<test_helpers::config_test_t, test_helpers::config_test_v2>);
@@ -93,6 +133,27 @@ SCENARIO("a configuration states its version", "[config][migration]")
     {
       STATIC_REQUIRE(!arude::config::configuration_c<int>);
       STATIC_REQUIRE(!arude::config::configuration_c<arude::config::binary>);
+    }
+  }
+}
+
+SCENARIO("a configuration cannot declare a member called version", "[config][migration]")
+{
+  GIVEN("a type that declares a version data member beside config_version")
+  {
+    THEN("it is not a configuration, as the member would collide with the version key")
+    {
+      STATIC_REQUIRE(arude::config::detail::declares_version_member_c<migration_test::with_version_member>);
+      STATIC_REQUIRE(!arude::config::configuration_c<migration_test::with_version_member>);
+    }
+  }
+
+  GIVEN("a type whose only version besides config_version is a static member")
+  {
+    THEN("it is a configuration, as nothing of that name is written")
+    {
+      STATIC_REQUIRE(!arude::config::detail::declares_version_member_c<migration_test::with_static_version>);
+      STATIC_REQUIRE(arude::config::configuration_c<migration_test::with_static_version>);
     }
   }
 }
