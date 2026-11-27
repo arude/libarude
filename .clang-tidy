@@ -62,6 +62,20 @@ CheckOptions:
   - key: cppcoreguidelines-macro-usage.AllowedRegexp
     value: '^ARUDE_'
 
+  # do/while(false) is the wrapper that makes a multi-statement macro one
+  # statement, which is what lets ARUDE_LOGI sit in an unbraced if/else and
+  # take a semicolon. The check is aimed at hand-written loops, and there is no
+  # other way to write the macro. Ordinary do-while loops are still reported.
+  - key: cppcoreguidelines-avoid-do-while.IgnoreMacros
+    value: true
+
+  # Complexity belongs to whoever wrote it. An ARUDE_LOG expansion carries a
+  # try/catch, an if, and an if constexpr, so three log statements alone push a
+  # function past the threshold and the report names a function whose author
+  # wrote three log statements. Code outside macros still counts.
+  - key: readability-function-cognitive-complexity.IgnoreMacros
+    value: true
+
   # snake_case throughout, per docs/cpp-conventions.md.
   - key: readability-identifier-naming.NamespaceCase
     value: lower_case

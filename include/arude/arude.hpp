@@ -19,6 +19,7 @@
 #include "arude/exception_report.hpp"
 #include "arude/function_signature.hpp"
 #include "arude/hello_world.hpp"
+#include "arude/log.hpp"
 #include "arude/non_owning_t.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"

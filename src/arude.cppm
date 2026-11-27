@@ -34,6 +34,7 @@ module;
 #include "arude/exception_report.hpp"
 #include "arude/function_signature.hpp"
 #include "arude/hello_world.hpp"
+#include "arude/log.hpp"
 #include "arude/non_owning_t.hpp"
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"
@@ -136,6 +137,14 @@ using ::arude::exception_string_t;
 using ::arude::exception_user_data_c;
 using ::arude::function_signature;
 using ::arude::hello_world;
+
+// The logging functions only. The ARUDE_LOG macros are macros, so they do not
+// come across a module boundary at all and a consumer that wants them has to
+// include arude/log.hpp the usual way.
+using ::arude::log;
+using ::arude::log_global_log_level;
+using ::arude::log_level;
+
 using ::arude::non_owning_t;
 using ::arude::noncopyable;
 using ::arude::pimpl_owner;
