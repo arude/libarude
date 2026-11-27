@@ -32,6 +32,7 @@ module;
 #include "arude/enum.hpp"
 #include "arude/exception.hpp"
 #include "arude/exception_report.hpp"
+#include "arude/function_signature.hpp"
 #include "arude/hello_world.hpp"
 #include "arude/non_owning_t.hpp"
 #include "arude/noncopyable.hpp"
@@ -133,6 +134,7 @@ using ::arude::exception_report;
 using ::arude::exception_stacktrace_t;
 using ::arude::exception_string_t;
 using ::arude::exception_user_data_c;
+using ::arude::function_signature;
 using ::arude::hello_world;
 using ::arude::non_owning_t;
 using ::arude::noncopyable;
