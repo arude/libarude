@@ -18,6 +18,17 @@
 #include "test/helpers/temp_file.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+
+#if (defined _WIN32)
+  #if !(defined WIN32_LEAN_AND_MEAN)
+    #define WIN32_LEAN_AND_MEAN
+  #endif // #if !(defined WIN32_LEAN_AND_MEAN)
+  #if !(defined NOMINMAX)
+    #define NOMINMAX
+  #endif // #if !(defined NOMINMAX)
+  #include <windows.h>
+#endif // #if (defined _WIN32)
+
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -1353,6 +1364,114 @@ SCENARIO("a load overlapping a store of the same file reads one whole file", "[c
     }
   }
 }
+
+#if (defined _WIN32)
+
+// On Windows a store replaces the file with POSIX rename semantics: a reader
+// that shares deletion, as read_file opens it, does not stop the store, while
+// a foreign handle without FILE_SHARE_DELETE fails it at once. These pin both.
+SCENARIO("a store over a file held open without shared deletion fails quickly", "[config][config_file][windows]")
+{
+  GIVEN("a stored file held open by a handle that does not share its deletion")
+  {
+    const auto directory = test_helpers::temp_directory{"arude_config_file_held"};
+    const auto file_path = directory.path() / "app.toml";
+
+    auto file = arude::config::config_file<config_file_test::app, arude::config::transport_file>{
+      arude::config::transport_file{file_path}};
+    auto value = config_file_test::app{};
+    value.name = "stored";
+    file.set(value);
+    file.store();
+
+    // As a foreign reader (an editor, or another process still on
+    // std::ifstream) opens it: read and write, but no deletion.
+    const auto handle = ::CreateFileW(
+      file_path.c_str(),
+      GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr);
+    REQUIRE(handle != INVALID_HANDLE_VALUE);
+
+    value.name = "newer";
+    file.set(value);
+
+    WHEN("it is stored")
+    {
+      THEN("the store is an io_error within a second, and no temporary file is left behind")
+      {
+        const auto started = std::chrono::steady_clock::now();
+        auto io_error = false;
+
+        try
+        {
+          file.store();
+        }
+        catch(const arude::config::exception_t& ex)
+        {
+          io_error = ex.data() == arude::config::config_error::io_error;
+        }
+
+        ::CloseHandle(handle);
+
+        REQUIRE(io_error);
+        REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds{1});
+        REQUIRE(std::ranges::distance(std::filesystem::directory_iterator{directory.path()}) == 1);
+      }
+    }
+  }
+}
+
+SCENARIO("a reader sharing the file's deletion does not stop a store", "[config][config_file][windows]")
+{
+  GIVEN("a stored file held open the way read_file holds it")
+  {
+    const auto directory = test_helpers::temp_directory{"arude_config_file_sharing"};
+    const auto file_path = directory.path() / "app.toml";
+
+    auto file = arude::config::config_file<config_file_test::app, arude::config::transport_file>{
+      arude::config::transport_file{file_path}};
+    auto value = config_file_test::app{};
+    value.name = "stored";
+    file.set(value);
+    file.store();
+
+    // read_file grants FILE_SHARE_DELETE, which is what lets a store replace
+    // the file while it is open.
+    const auto handle = ::CreateFileW(
+      file_path.c_str(),
+      GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr);
+    REQUIRE(handle != INVALID_HANDLE_VALUE);
+
+    value.name = "newer";
+    file.set(value);
+
+    WHEN("it is stored while the reader holds the file")
+    {
+      THEN("the store succeeds, and a load afterwards sees the new value")
+      {
+        file.store();
+        ::CloseHandle(handle);
+
+        auto reader = arude::config::config_file<config_file_test::app, arude::config::transport_file>{
+          arude::config::transport_file{file_path}};
+        reader.load();
+
+        REQUIRE(reader.get().name == "newer");
+      }
+    }
+  }
+}
+
+#endif // #if (defined _WIN32)
 
 SCENARIO("of two loads under way at once, the later one's read is the one that stands", "[config][config_file]")
 {

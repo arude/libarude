@@ -65,10 +65,10 @@ namespace arude::config::detail
 ///
 /// The replacement is a new file. It takes the old file's permissions, but
 /// not its owner, and a hard link to the old file keeps the old contents. On
-/// Windows the rename is refused while another handle has the file open
-/// without sharing its deletion, which a std::ifstream reading it at that
-/// moment is; it is tried again for about a tenth of a second, and fails the
-/// write if the file is still held after that.
+/// Windows the replace uses POSIX rename semantics through a handle that
+/// shares deletion, so a reader holding the file open does not stop it; only
+/// where the filesystem cannot replace an open file at all is the rename
+/// tried again for about a tenth of a second before the write fails.
 ///
 /// \param path File to write.
 /// \param bytes Bytes to write. Not retained.
