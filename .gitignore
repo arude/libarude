@@ -14,3 +14,7 @@ docs/warnings.log
 # clangd's index, dropped in the workspace root by the VS Code extension.
 .cache/
 
+# Implementation brief for work in progress. Working material rather than
+# library documentation, and deleted once the work it describes has landed.
+PLAN.md
+

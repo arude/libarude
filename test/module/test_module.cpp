@@ -25,6 +25,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <variant>
 
 import arude;
 
@@ -163,6 +164,18 @@ SCENARIO("the module exports the public interface", "[module]")
     THEN("type_name is reachable and still constexpr")
     {
       STATIC_REQUIRE(arude::type_name<int>() == "int");
+    }
+
+    THEN("type_key is reachable and tells types apart")
+    {
+      REQUIRE(arude::type_key<int>() == arude::type_key<int>());
+      REQUIRE(arude::type_key<int>() != arude::type_key<double>());
+      STATIC_REQUIRE(std::is_same_v<decltype(arude::type_key<int>()), arude::type_key_t>);
+    }
+
+    THEN("dependent_t is reachable and still transparent")
+    {
+      STATIC_REQUIRE(std::is_same_v<arude::dependent_t<int, module_test::widget>, module_test::widget>);
     }
 
     THEN("hello_world is reachable, so out-of-line definitions link")
@@ -376,6 +389,28 @@ SCENARIO("the module exports both exception_report overloads", "[module]")
   }
 }
 
+SCENARIO("the module exports exception_message", "[module]")
+{
+  GIVEN("an exception in flight")
+  {
+    auto message = arude::exception_string_t{};
+
+    try
+    {
+      throw arude::exception{"message only"};
+    }
+    catch(...)
+    {
+      message = arude::exception_message();
+    }
+
+    THEN("its message comes back alone")
+    {
+      REQUIRE(message == "message only");
+    }
+  }
+}
+
 // A module consumer and a header consumer must agree on what arude::exception
 // is. They do because the headers are included in the global module fragment,
 // so the type keeps global-module linkage. Were it attached to the module, this
@@ -407,3 +442,316 @@ SCENARIO("a throw from a header consumer is caught by an importer", "[module]")
     }
   }
 }
+
+// Guarded the way src/arude.cppm guards the export list itself: with the
+// configuration support declined there is nothing here to reach. The macro
+// arrives from the library target, so this file still includes no arude header.
+#if !(defined ARUDE_NO_CONFIG)
+
+namespace module_test
+{
+
+///
+/// Version 1 of a small sub-configuration a member of the consumer's root
+/// carries in a versioned<> wrapper.
+///
+struct net_v1
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// The host, as version 1 names it.
+  ///
+  std::string host = "v1-host";
+};
+
+///
+/// Version 2 of the same sub-configuration.
+///
+struct net_v2
+{
+  ///
+  /// The version before this one.
+  ///
+  using previous_t = net_v1;
+
+  ///
+  /// \see net_v1::config_version
+  ///
+  static constexpr auto config_version = arude::config::version_t{2};
+
+  ///
+  /// \see net_v1::version
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// The host, as version 2 names it.
+  ///
+  std::string hostname = "v2-host";
+};
+
+///
+/// Upgrades a network from version 1 to version 2.
+/// \param val The version 1 network. Not retained.
+/// \return The same network as version 2.
+///
+[[nodiscard]] constexpr auto upgrade(const net_v1& val) -> net_v2;
+
+///
+/// Downgrades a network from version 2 to version 1.
+/// \param val The version 2 network. Not retained.
+/// \return The same network as version 1.
+///
+[[nodiscard]] constexpr auto downgrade(const net_v2& val) -> net_v1;
+
+///
+///
+constexpr auto upgrade(const net_v1& val) -> net_v2
+{
+  return net_v2{.hostname = val.host};
+}
+
+///
+///
+constexpr auto downgrade(const net_v2& val) -> net_v1
+{
+  return net_v1{.host = val.hostname};
+}
+
+///
+/// A module consumer's own configuration, version 1.
+/// Declared here rather than taken from the library, because the library ships
+/// no configuration type: what has to work is the versioning machinery applied
+/// to a type the module has never seen, which is what a consumer actually has.
+///
+struct app_config_v1
+{
+  ///
+  /// The version this type is.
+  ///
+  static constexpr auto config_version = arude::config::version_t{1};
+
+  ///
+  /// The version carried in the text.
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// Name this configuration is known by.
+  ///
+  std::string name = "module";
+
+  ///
+  /// Opaque payload, written as base64 text.
+  ///
+  arude::config::binary secret;
+
+  ///
+  /// The network member, carrying its own version.
+  ///
+  arude::config::versioned<net_v2> network;
+
+  ///
+  /// The day the configuration takes effect.
+  ///
+  std::chrono::year_month_day due{std::chrono::year{2026} / 8 / 17};
+};
+
+///
+/// The same configuration, version 2.
+///
+struct app_config_v2
+{
+  ///
+  /// The version before this one, which migration walks back through.
+  ///
+  using previous_t = app_config_v1;
+
+  ///
+  /// \see app_config_v1::config_version
+  ///
+  static constexpr auto config_version = arude::config::version_t{2};
+
+  ///
+  /// \see app_config_v1::version
+  ///
+  arude::config::version_t version = config_version;
+
+  ///
+  /// \see app_config_v1::name
+  ///
+  std::string name = "module";
+
+  ///
+  /// Host the configured service is reached at. New in version 2.
+  ///
+  std::string endpoint = "localhost";
+
+  ///
+  /// \see app_config_v1::secret
+  ///
+  arude::config::binary secret;
+
+  ///
+  /// \see app_config_v1::network
+  ///
+  arude::config::versioned<net_v2> network;
+
+  ///
+  /// \see app_config_v1::due
+  ///
+  std::chrono::year_month_day due{std::chrono::year{2026} / 8 / 17};
+};
+
+///
+/// The version this consumer builds against.
+///
+using app_config_t = app_config_v2;
+
+///
+/// Produces a version 2 configuration from a version 1 one.
+/// Found by argument-dependent lookup from arude::config::migrate, which is
+/// the whole mechanism: the step lives beside the types, in the consumer's
+/// namespace, and the library never sees it declared.
+///
+/// \param val Configuration to upgrade. Not retained.
+/// \return The same configuration as version 2.
+///
+[[nodiscard]] constexpr auto upgrade(const app_config_v1& val) -> app_config_v2;
+
+///
+/// Produces a version 1 configuration from a version 2 one.
+/// \param val Configuration to downgrade. Not retained.
+/// \return The same configuration as version 1, less what version 1 cannot hold.
+///
+[[nodiscard]] constexpr auto downgrade(const app_config_v2& val) -> app_config_v1;
+
+///
+///
+constexpr auto upgrade(const app_config_v1& val) -> app_config_v2
+{
+  return app_config_v2{.name = val.name, .secret = val.secret, .network = val.network, .due = val.due};
+}
+
+///
+///
+constexpr auto downgrade(const app_config_v2& val) -> app_config_v1
+{
+  return app_config_v1{.name = val.name, .secret = val.secret, .network = val.network, .due = val.due};
+}
+
+} // namespace module_test
+
+SCENARIO("the module exports the configuration interface", "[module][config]")
+{
+  GIVEN("nothing imported but arude")
+  {
+    THEN("the concepts and the version arithmetic came across")
+    {
+      STATIC_REQUIRE(arude::config::configuration_c<module_test::app_config_t>);
+      STATIC_REQUIRE(arude::config::transport_c<arude::config::transport_file>);
+      STATIC_REQUIRE(
+        std::is_same_v<arude::config::versioned<module_test::app_config_t>::value_t, module_test::app_config_t>);
+      STATIC_REQUIRE(std::is_same_v<module_test::app_config_t, module_test::app_config_v2>);
+      STATIC_REQUIRE(arude::config::version_of<module_test::app_config_v2>() == 2);
+    }
+
+    THEN("a config_file over the file transport is what a consumer builds on")
+    {
+      using file_t = arude::config::config_file<module_test::app_config_t, arude::config::transport_file>;
+
+      STATIC_REQUIRE(std::is_same_v<file_t::value_t, module_test::app_config_t>);
+      STATIC_REQUIRE(std::is_same_v<file_t::transport_t, arude::config::transport_file>);
+      STATIC_REQUIRE(std::is_same_v<file_t::format_t, arude::config::toml_format>);
+    }
+
+    THEN("base64 came across and is still constexpr")
+    {
+      STATIC_REQUIRE(arude::config::base64_encoded_size(3) == 4);
+    }
+
+    THEN("a migration runs, so the steps came across with the types")
+    {
+      REQUIRE(arude::config::migrate<module_test::app_config_v2>(module_test::app_config_v1{}).version == 2);
+    }
+  }
+}
+
+// A module consumer's own versioned configuration is read through the same
+// machinery a header consumer's is: the text declares the version it was
+// written by, and from_toml_migrated brings the root and every versioned
+// member of it to the version this build has.
+SCENARIO("a module consumer reads a versioned member", "[module][config]")
+{
+  GIVEN("text written by version 1 of the consumer's configuration, whose member is also one version behind")
+  {
+    static constexpr auto text = std::string_view{"version = 1\n"
+                                                  "name = \"old\"\n"
+                                                  "secret = \"\"\n"
+                                                  "due = 2026-08-17\n"
+                                                  "[network]\n"
+                                                  "version = 1\n"
+                                                  "host = \"old-host\"\n"};
+
+    WHEN("it is read as the current version, migrating")
+    {
+      const auto read = arude::config::from_toml_migrated<module_test::app_config_t>(text);
+
+      THEN("what version 1 carried came forward, the member's rename included")
+      {
+        REQUIRE(read.name == "old");
+        REQUIRE(read.version == arude::config::version_of<module_test::app_config_t>());
+        REQUIRE(read.network.value().hostname == "old-host");
+        REQUIRE(read.network.value().version == arude::config::version_of<module_test::net_v2>());
+      }
+    }
+  }
+}
+
+// The point of the anchors in src/arude.cppm. Both specializations are found
+// by name lookup here rather than inside the module, so a conforming compiler
+// that pruned them would fail on this and nowhere else.
+SCENARIO("the module carries the configuration specializations", "[module][config]")
+{
+  GIVEN("a configuration holding a binary payload")
+  {
+    auto payload = arude::config::binary{};
+    payload.base64("Zm9v");
+
+    const auto text = arude::config::to_toml(module_test::app_config_t{.secret = payload});
+
+    THEN("the reflector stored it as base64, and reads it back")
+    {
+      REQUIRE(text.contains("Zm9v"));
+      REQUIRE(arude::config::from_toml<module_test::app_config_t>(text).secret == payload);
+    }
+
+    THEN("the calendar date round-trips as a native TOML date")
+    {
+      REQUIRE(text.contains("due = 2026-08-17"));
+      REQUIRE(
+        arude::config::from_toml<module_test::app_config_t>(text).due ==
+        std::chrono::year_month_day{std::chrono::year{2026} / 8 / 17});
+    }
+  }
+
+  GIVEN("a configuration error")
+  {
+    THEN("it formats as its name, which is what the formatter anchor is for")
+    {
+      REQUIRE(std::format("{}", arude::config::config_error::io_error) == "io_error");
+      STATIC_REQUIRE(arude::enum_name(arude::config::config_error::not_found) == "not_found");
+    }
+  }
+}
+
+#endif // #if !(defined ARUDE_NO_CONFIG)

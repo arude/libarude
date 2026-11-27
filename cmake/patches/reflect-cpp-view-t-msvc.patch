@@ -1,0 +1,36 @@
+reflect-cpp 0.23.0: build rfl::view_t from a call expression, for MSVC.
+
+view_t passes the type of Processors<...>::process<T, X>, a function template
+whose return type is deduced and not yet deduced, to std::invoke_result_t.
+MSVC 14.52 refuses that as a template argument (C3539, "a template-argument
+cannot be a type that contains 'auto'"), and reflect-cpp's own struct parser
+reaches view_t through named_tuple_t, so no struct can be read. The decltype of
+a call names the same type and makes the compiler deduce it. reflect-cpp's own
+Windows CI builds at C++20 only; libarude builds at C++23.
+
+Applied by CPMAddPackage in CMakeLists.txt. Drop it once reflect-cpp is
+upgraded to a release that no longer needs it.
+
+--- a/include/rfl/view_t.hpp
++++ b/include/rfl/view_t.hpp
+@@ -2,6 +2,7 @@
+ #define RFL_VIEW_T_HPP_
+ 
+ #include <type_traits>
++#include <utility>
+ 
+ #include "Processors.hpp"
+ #include "internal/ptr_named_tuple_t.hpp"
+@@ -10,10 +11,8 @@
+ 
+ /// Generates the named tuple that would be the result of to_view
+ template <class T, class... Ps>
+-using view_t =
+-    std::invoke_result_t<decltype(Processors<Ps...>::template process<
+-                                  T, internal::ptr_named_tuple_t<T>>),
+-                         internal::ptr_named_tuple_t<T>>;
++using view_t = decltype(Processors<Ps...>::template process<T>(
++    std::declval<internal::ptr_named_tuple_t<T>>()));
+ 
+ }  // namespace rfl
+ 

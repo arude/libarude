@@ -112,7 +112,9 @@ SCENARIO("exception_base carries message, location and stacktrace", "[exception]
 
 // The base is a compile-time choice and the two settings cannot share a binary:
 // each gives exception_base a different base class, which is an ODR violation.
-// This file covers the default; test/config covers the other.
+// This file covers the default; test/config covers the other, which is also
+// what a build with the ARUDE_EXCEPTION_RUNTIME_ERROR_BASE option compiles here.
+#if !(defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
 SCENARIO("the default base keeps arude exceptions out of the std hierarchy", "[exception]")
 {
   GIVEN("the default configuration")
@@ -145,6 +147,7 @@ SCENARIO("the default base keeps arude exceptions out of the std hierarchy", "[e
     }
   }
 }
+#endif // #if !(defined ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
 
 SCENARIO("exception carries a user data payload", "[exception]")
 {

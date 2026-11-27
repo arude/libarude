@@ -59,6 +59,23 @@ jobs:
             os: ubuntu-latest
             cxx: clang++
             std: 23
+          # The only row building the module and the only one declining the
+          # configuration support. The two meet in src/arude.cppm, which must
+          # still export everything outside its ARUDE_NO_CONFIG guard when the
+          # guarded half is gone. Clang, because CMakeLists.txt refuses the
+          # module under GCC.
+          - name: Linux / Clang / module, no config
+            os: ubuntu-latest
+            cxx: clang++
+            module: ON
+            no_config: ON
+          # The only row building the HTTPS transport and its test, which runs
+          # TLS servers on 127.0.0.1. cpp-httplib is fetched like everything
+          # else, but the OpenSSL it builds against has to be on the runner.
+          - name: Linux / Clang / HTTPS
+            os: ubuntu-latest
+            cxx: clang++
+            https: ON
           - name: Windows / MSVC
             os: windows-latest
           - name: macOS / AppleClang
@@ -77,6 +94,14 @@ jobs:
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      # The headers and the libraries to link, not just the runtime the image
+      # already has. Asked for by name, so a runner image that drops it, or
+      # one that has it already, makes no difference.
+      - if: matrix.https == 'ON'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+
       - name: Configure
         shell: bash
         run: |
@@ -86,6 +111,15 @@ jobs:
           fi
           if [ -n "${{ matrix.std }}" ]; then
             args+=(-DARUDE_CXX_STANDARD=${{ matrix.std }})
+          fi
+          if [ -n "${{ matrix.module }}" ]; then
+            args+=(-DARUDE_BUILD_MODULE=${{ matrix.module }})
+          fi
+          if [ -n "${{ matrix.no_config }}" ]; then
+            args+=(-DARUDE_NO_CONFIG=${{ matrix.no_config }})
+          fi
+          if [ -n "${{ matrix.https }}" ]; then
+            args+=(-DARUDE_HTTPS=${{ matrix.https }})
           fi
           cmake "${args[@]}"
 

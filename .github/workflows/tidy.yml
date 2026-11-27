@@ -26,14 +26,26 @@ jobs:
       - name: Report versions
         run: clang-tidy --version
 
+      # The HTTPS transport needs the OpenSSL headers and libraries, as in the
+      # build workflow's HTTPS row.
+      - name: Install OpenSSL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+
       # A full build, not just a configure: Catch2 generates
       # catch_user_config.hpp at build time, and clang-tidy cannot parse the
       # test translation unit without it.
+      #
+      # ARUDE_HTTPS=ON because it only adds code: the transport and its test
+      # are built, and so enter the compilation database, and nothing else
+      # loses a line it would compile without it.
       - name: Configure and build
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_BUILD_TYPE=Debug
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DARUDE_HTTPS=ON
           cmake --build build
 
       - name: Analyse
@@ -46,7 +58,8 @@ jobs:
           # analysed with fallback flags and invent diagnostics no build
           # produces. Lint them locally with a matching clang and the module on.
           mapfile -t sources < <(
-            git ls-files 'src/*.cpp' 'test/*.cpp' 'benchmark/*.cpp' | grep -v '^test/module/'
+            git ls-files 'src/*.cpp' 'test/*.cpp' 'benchmark/*.cpp' |
+              grep -v -e '^test/module/'
           )
           if [ ${#sources[@]} -eq 0 ]; then
             echo "No translation units to analyse."

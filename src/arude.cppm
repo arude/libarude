@@ -18,6 +18,12 @@
 /// in the other. For an exception library that is the wrong trade at any price.
 /// test/module/ links both consumption styles into one program to hold that.
 ///
+/// The configuration support is carried under the same guard the headers use.
+/// ARUDE_NO_CONFIG is a PUBLIC compile definition of the library target, so it
+/// arrives here from the build that decided it, and the module offers what the
+/// build has: with the support declined, reflect-cpp and toml++ were never
+/// fetched, the header cannot compile, and there are no names to export.
+///
 
 module;
 
@@ -31,7 +37,18 @@ module;
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"
 #include "arude/signal_owner.hpp"
+#include "arude/type_key.hpp"
 #include "arude/type_name.hpp"
+#include "arude/type_traits.hpp"
+
+// Out of the sorted group above because it is conditional, and guarded exactly
+// as arude/arude.hpp guards it. This pulls reflect-cpp's and toml++'s headers
+// into the fragment as well, and cpp-httplib's where the build has the HTTPS
+// transport, which is what a module consumer of the configuration interface
+// needs and costs a header consumer nothing.
+#if !(defined ARUDE_NO_CONFIG)
+  #include "arude/config.hpp"
+#endif // #if !(defined ARUDE_NO_CONFIG)
 
 export module arude;
 
@@ -54,6 +71,31 @@ using source_location_formatter_t = std::formatter<std::source_location>;
 using exception_base_formatter_t = std::formatter<arude::exception_base>;
 
 } // namespace arude::detail
+
+#if !(defined ARUDE_NO_CONFIG)
+
+namespace arude::config::detail
+{
+
+// Reachability anchors, for the reason given above. The reflector is the one
+// that matters most: it is what stores a binary payload as base64, and it is
+// found by name lookup where a configuration holding one is parsed, which
+// happens in the consumer's translation unit rather than here. Discarded, it
+// would take a configuration with a payload down with it and leave the rest of
+// the interface working.
+//
+// The second anchors one instantiation of the formatter arude/enum.hpp carries
+// for every enum, which is the instantiation the library's own error reports
+// need. It cannot do more than that: what the fragment holds is a partial
+// specialization, a using-declaration can only name an instantiation of one,
+// and so a module consumer formatting an enum of its own is relying on that
+// partial specialization surviving the prune rather than on anything here.
+using binary_reflector_t = rfl::Reflector<arude::config::binary>;
+using config_errors_formatter_t = std::formatter<arude::config::config_error>;
+
+} // namespace arude::config::detail
+
+#endif // #if !(defined ARUDE_NO_CONFIG)
 
 ///
 /// The public interface, re-exported.
@@ -83,8 +125,10 @@ using ::arude::enum_type_name;
 using ::arude::enum_value;
 using ::arude::enum_values;
 
+using ::arude::dependent_t;
 using ::arude::exception;
 using ::arude::exception_base;
+using ::arude::exception_message;
 using ::arude::exception_report;
 using ::arude::exception_stacktrace_t;
 using ::arude::exception_string_t;
@@ -97,9 +141,27 @@ using ::arude::signal_owner;
 using ::arude::signal_owner_base;
 using ::arude::signal_relay;
 using ::arude::stacktrace_available;
+using ::arude::type_key;
+using ::arude::type_key_t;
 using ::arude::type_name;
 
 } // namespace arude
+
+// The bitwise operators for flag enumerations, re-exported the way
+// arude/enum.hpp keeps them: a namespace of their own, brought in with a
+// using-directive where flags are combined.
+export namespace arude::bitwise_operators
+{
+
+using magic_enum::bitwise_operators::operator&;
+using magic_enum::bitwise_operators::operator&=;
+using magic_enum::bitwise_operators::operator^;
+using magic_enum::bitwise_operators::operator^=;
+using magic_enum::bitwise_operators::operator|;
+using magic_enum::bitwise_operators::operator|=;
+using magic_enum::bitwise_operators::operator~;
+
+} // namespace arude::bitwise_operators
 
 export namespace arude::detail
 {
@@ -108,3 +170,67 @@ using ::arude::detail::exception_base_formatter_t;
 using ::arude::detail::source_location_formatter_t;
 
 } // namespace arude::detail
+
+#if !(defined ARUDE_NO_CONFIG)
+
+///
+/// The configuration interface, re-exported.
+/// Everything arude/config.hpp offers, under the same guard: a build that
+/// declined the support has none of these names to export, and a module
+/// consumer of that build sees the module without them rather than a module
+/// that fails to compile.
+///
+export namespace arude::config
+{
+
+using ::arude::config::as_bytes;
+using ::arude::config::as_text;
+using ::arude::config::base64_decode;
+using ::arude::config::base64_decoded_size;
+using ::arude::config::base64_encode;
+using ::arude::config::base64_encoded_size;
+using ::arude::config::binary;
+using ::arude::config::byte_range_c;
+using ::arude::config::config_error;
+using ::arude::config::config_file;
+using ::arude::config::config_member;
+using ::arude::config::configuration_c;
+using ::arude::config::downgradable_configuration_c;
+using ::arude::config::exception_t;
+using ::arude::config::from_toml;
+using ::arude::config::from_toml_migrated;
+using ::arude::config::has_previous_configuration_c;
+using ::arude::config::is_set;
+using ::arude::config::load_policy;
+using ::arude::config::migrate;
+using ::arude::config::path_transport_c;
+using ::arude::config::to_toml;
+using ::arude::config::toml_format;
+using ::arude::config::toml_version;
+using ::arude::config::transport_c;
+using ::arude::config::transport_file;
+using ::arude::config::upgradable_configuration_c;
+using ::arude::config::version_of;
+using ::arude::config::version_t;
+using ::arude::config::versioned;
+
+  // The HTTPS transport is exported only where the build has it, on the same
+  // condition arude/config.hpp includes it on.
+  #if (defined ARUDE_HTTPS)
+
+using ::arude::config::transport_https;
+using ::arude::config::transport_https_options;
+
+  #endif // #if (defined ARUDE_HTTPS)
+
+} // namespace arude::config
+
+export namespace arude::config::detail
+{
+
+using ::arude::config::detail::binary_reflector_t;
+using ::arude::config::detail::config_errors_formatter_t;
+
+} // namespace arude::config::detail
+
+#endif // #if !(defined ARUDE_NO_CONFIG)

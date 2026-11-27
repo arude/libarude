@@ -45,6 +45,18 @@ include(cmake/stacktrace.cmake)
 
 arude_find_stacktrace_library(ARUDE_STACKTRACE_LIBRARY ${ARUDE_CXX_STANDARD})
 
+# ---- Exception base ----
+
+# Derives arude::exception from std::runtime_error, so a std::exception handler
+# catches it; see arude/exception.hpp. The setting changes the exception's base
+# class and layout, and the configuration support compiled into this library
+# throws it, so the library and everything linking it have to agree. That is
+# why it is an option with a PUBLIC definition rather than a macro a consumer
+# defines for itself. A consumer that defines it anyway, against a library
+# built without it, fails to link the configuration support; see
+# arude/config/common.hpp.
+option(ARUDE_EXCEPTION_RUNTIME_ERROR_BASE "Derive arude exceptions from std::runtime_error" OFF)
+
 # ---- Coverage ----
 
 option(ARUDE_ENABLE_COVERAGE "Build with coverage instrumentation" OFF)
@@ -62,12 +74,113 @@ include(cmake/CPM.cmake)
 # project, so as a subproject they are already off and need no overriding here.
 CPMAddPackage("gh:Neargye/magic_enum@0.9.8")
 
+# ---- Configuration support ----
+
+# Configuration support is part of libarude rather than an extra, so the option
+# is a way of declining it and not a way of asking for it. Off means the two
+# dependencies below are never downloaded, arude/config.hpp is not reachable,
+# and nothing else changes.
+option(ARUDE_NO_CONFIG "Build without the TOML configuration support" OFF)
+
+if(NOT ARUDE_NO_CONFIG)
+  # reflect-cpp compiles one translation unit per serialization format it
+  # supports, each with its own third-party parser behind it. TOML is the only
+  # format libarude uses, so it is the only one asked for; the others would be
+  # dependencies bought and never used. JSON is switched off explicitly because
+  # it is the format reflect-cpp enables by default.
+  set(REFLECTCPP_TOML ON)
+  set(REFLECTCPP_JSON OFF)
+  set(REFLECTCPP_BUILD_SHARED OFF)
+  set(REFLECTCPP_BUILD_TESTS OFF)
+  set(REFLECTCPP_BUILD_BENCHMARKS OFF)
+
+  # reflect-cpp does not vendor toml++. Its CMakeLists calls find_package for it
+  # and then links tomlplusplus::tomlplusplus, so without one supplied here the
+  # generate step fails on a target that does not exist. find_package is guarded
+  # with "if(NOT TARGET tomlplusplus)", which is the hook for a parent project
+  # to bring its own — so this has to be added before reflect-cpp, not after.
+  # The version is what reflect-cpp 0.23.0 asks for in its vcpkg manifest.
+  CPMAddPackage("gh:marzer/tomlplusplus@3.4.0")
+
+  # Patched so that MSVC can read a struct at all; the patch says why.
+  CPMAddPackage(
+    NAME reflect-cpp
+    GITHUB_REPOSITORY getml/reflect-cpp
+    VERSION 0.23.0
+    PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/reflect-cpp-view-t-msvc.patch")
+
+  # Built at our standard for the same reason Catch2 is; see the comment there.
+  #
+  # Position independent because src/config is compiled into this library and
+  # calls into reflect-cpp, so a shared build of libarude links reflect-cpp's
+  # static archive into a shared object, which needs position independent code.
+  foreach(config_target IN ITEMS reflectcpp)
+    if(TARGET ${config_target})
+      set_target_properties(${config_target} PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                                        CXX_STANDARD_REQUIRED ON
+                                                        CXX_EXTENSIONS OFF
+                                                        POSITION_INDEPENDENT_CODE ON)
+    endif()
+  endforeach()
+endif()
+
+# ---- HTTPS transport ----
+
+# Positive, and off, where ARUDE_NO_CONFIG is negative and on. The polarity
+# follows the default rather than the other way round: configuration is part of
+# the library and is declined, while the HTTPS transport is asked for.
+#
+# It is asked for because it is the one thing here CPM cannot deliver whole.
+# cpp-httplib is a header and fetches like everything else, but TLS is not: it
+# needs OpenSSL, mbedTLS or wolfSSL on the machine, and a consumer reading its
+# configuration from a file — or from an EEPROM of its own — should not have to
+# find one.
+option(ARUDE_HTTPS "Build the HTTPS configuration transport" OFF)
+
+if(ARUDE_HTTPS AND ARUDE_NO_CONFIG)
+  message(
+    FATAL_ERROR
+      "libarude: ARUDE_HTTPS is a transport for the configuration support, which ARUDE_NO_CONFIG has switched off. "
+      "Turn one of the two around."
+  )
+endif()
+
+if(ARUDE_HTTPS)
+  # cpp-httplib finds the TLS backend itself and puts both the library and the
+  # CPPHTTPLIB_*_SUPPORT define on its own target, so nothing here has to name
+  # OpenSSL. Swapping the backend is HTTPLIB_REQUIRE_MBEDTLS or
+  # HTTPLIB_REQUIRE_WOLFSSL in place of this line; the transport's test, which
+  # makes its certificate through the OpenSSL API, is then left out.
+  set(HTTPLIB_REQUIRE_OPENSSL ON)
+  CPMAddPackage("gh:yhirose/cpp-httplib@0.51.0")
+
+  if(TARGET httplib)
+    set_target_properties(httplib PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                             CXX_STANDARD_REQUIRED ON
+                                             CXX_EXTENSIONS OFF)
+  endif()
+endif()
+
 # ---- Add source files ----
 
 # Note: globbing sources is considered bad practice as CMake's generators may not detect new files
 # automatically. Keep that in mind when changing files, or explicitly mention them here.
 file(GLOB_RECURSE headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp")
 file(GLOB_RECURSE sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+
+# src/config holds the definitions behind arude/config/, which include
+# reflect-cpp's and toml++'s headers. With the configuration support declined
+# neither was fetched, so none of it can compile, and nothing would call it.
+if(ARUDE_NO_CONFIG)
+  list(FILTER sources EXCLUDE REGEX "/src/config/")
+endif()
+
+# The HTTPS transport's definitions include cpp-httplib, which is only fetched
+# when the transport was asked for, and its header refuses to compile without
+# ARUDE_HTTPS.
+if(NOT ARUDE_HTTPS)
+  list(FILTER sources EXCLUDE REGEX "/src/config/transport_https\\.cpp$")
+endif()
 
 # ---- Create library ----
 
@@ -83,8 +196,12 @@ target_compile_options(${PROJECT_NAME} PUBLIC "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>
 
 # --coverage is understood by both GCC and Clang and emits gcov-format data.
 # PUBLIC so the test executable is instrumented and linked the same way.
+#
+# -fprofile-update=atomic because the tests run threads through the same
+# code: plain counters race, a lost update can leave a line's count
+# negative, and gcovr then refuses the whole report.
 if(ARUDE_ENABLE_COVERAGE)
-  target_compile_options(${PROJECT_NAME} PUBLIC --coverage -O0 -g)
+  target_compile_options(${PROJECT_NAME} PUBLIC --coverage -fprofile-update=atomic -O0 -g)
   target_link_options(${PROJECT_NAME} PUBLIC --coverage)
 endif()
 
@@ -97,6 +214,35 @@ endif()
 # PUBLIC for the same reason: magic_enum is header-only, and a header of ours
 # that includes it puts it on every consumer's include path too.
 target_link_libraries(${PROJECT_NAME} PUBLIC magic_enum::magic_enum)
+
+# PUBLIC for the same reason: the headers in arude/config/ include reflect-cpp's,
+# so a consumer compiles them itself and links what they compile. toml++ is named
+# beside it rather than left to arrive through reflect-cpp's own link, because
+# libarude includes it directly: the TOML machinery parses into a toml::table.
+#
+# The definition goes the same way round as the option: defined only when the
+# support was declined, so a consumer who builds against these headers without
+# CMake gets the configuration support rather than silently losing it.
+if(ARUDE_NO_CONFIG)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC ARUDE_NO_CONFIG)
+else()
+  target_link_libraries(${PROJECT_NAME} PUBLIC reflectcpp tomlplusplus::tomlplusplus)
+endif()
+
+# PUBLIC, so the library and its consumers are built with the same exception
+# base; see the option above.
+if(ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC ARUDE_EXCEPTION_RUNTIME_ERROR_BASE)
+endif()
+
+# PUBLIC again: arude/config/transport_https.hpp includes httplib.h, so a
+# consumer of that header compiles it and needs the TLS backend behind it. The
+# definition is what makes the header reachable at all — it refuses to compile
+# without it, rather than going quiet and leaving the transport unregistered.
+if(ARUDE_HTTPS)
+  target_link_libraries(${PROJECT_NAME} PUBLIC httplib::httplib)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC ARUDE_HTTPS)
+endif()
 
 target_include_directories(
   ${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
@@ -175,23 +321,40 @@ if(BUILD_TESTING)
 
   file(GLOB_RECURSE test_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp")
 
-  # test/config holds translation units built against a different exception base.
-  # They must stay out of the main binary: the macro changes exception_base's
-  # base class, and two definitions of it in one program is an ODR violation.
+  # test/config holds translation units built against a different configuration:
+  # another exception base, or no RTTI. They must stay out of the main binary:
+  # each changes what a header defines, and two definitions of one entity in a
+  # program is an ODR violation.
   list(FILTER test_sources EXCLUDE REGEX "/test/config/")
 
   # test/module imports rather than includes, so it needs the module target and
   # is only built when that exists.
   list(FILTER test_sources EXCLUDE REGEX "/test/module/")
 
+  # test/configuration covers arude/config/, which is not built at all when the
+  # configuration support is declined. Named apart from test/config above,
+  # which is about build configuration rather than about this feature.
+  if(ARUDE_NO_CONFIG)
+    list(FILTER test_sources EXCLUDE REGEX "/test/configuration/")
+  endif()
+
+  # The HTTPS transport is not built at all unless it was asked for, and its
+  # test runs TLS servers against it through cpp-httplib and makes their
+  # certificate through the OpenSSL API, so it needs both the transport and
+  # the OpenSSL backend.
+  if(NOT ARUDE_HTTPS OR NOT HTTPLIB_REQUIRE_OPENSSL)
+    list(FILTER test_sources EXCLUDE REGEX "/test/configuration/test_transport_https\\.cpp$")
+  endif()
+
   add_executable(${PROJECT_NAME}_test ${test_sources})
   set_target_properties(${PROJECT_NAME}_test PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
                                                         CXX_STANDARD_REQUIRED ON
                                                         CXX_EXTENSIONS OFF)
-  # The project root, so a test that needs a second translation unit — test/pimpl
-  # holds the owners whose implementation must not be visible to the test itself
-  # — can include its header from the root the way docs/cpp-conventions.md asks
-  # rather than by relative path.
+  # The project root, so a test includes test/helpers/ from the root the way
+  # docs/cpp-conventions.md asks rather than by relative path — and so
+  # test/pimpl, whose owners' implementation must not be visible to the test
+  # itself, can include its header the same way. The helpers are picked up by
+  # the glob above and need no listing.
   target_include_directories(${PROJECT_NAME}_test PRIVATE ${PROJECT_SOURCE_DIR})
   target_link_libraries(${PROJECT_NAME}_test PRIVATE ${PROJECT_NAME} Catch2::Catch2WithMain)
 
@@ -214,6 +377,39 @@ if(BUILD_TESTING)
     ${PROJECT_NAME}_test_runtime_error_base PRIVATE ${PROJECT_NAME} Catch2::Catch2WithMain
   )
   catch_discover_tests(${PROJECT_NAME}_test_runtime_error_base)
+
+  # Without RTTI, so arude/type_key.hpp compiles the branch the main binary
+  # never does. The option is set here for the reason given above, and the file
+  # refuses to compile if it is missing. Keyed on the front end rather than the
+  # compiler, so clang-cl gets /GR- too. MSVC warns D9025 that /GR- overrides
+  # the /GR CMake puts in CMAKE_CXX_FLAGS; the later option wins, as intended.
+  add_executable(${PROJECT_NAME}_test_type_key_no_rtti test/config/test_type_key_no_rtti.cpp)
+
+  # The configuration support also builds without RTTI, so a config_file over
+  # the in-memory transport loads, migrates and stores in that build too. The
+  # helper lives under test/configuration/, which the ARUDE_NO_CONFIG filter
+  # drops from the main binary, so its source is named here rather than globbed.
+  if(NOT ARUDE_NO_CONFIG)
+    target_sources(
+      ${PROJECT_NAME}_test_type_key_no_rtti
+      PRIVATE test/config/test_config_no_rtti.cpp test/configuration/helpers/memory_transport.cpp
+    )
+  endif()
+  set_target_properties(${PROJECT_NAME}_test_type_key_no_rtti
+                        PROPERTIES CXX_STANDARD ${ARUDE_CXX_STANDARD}
+                                   CXX_STANDARD_REQUIRED ON
+                                   CXX_EXTENSIONS OFF)
+  target_compile_options(
+    ${PROJECT_NAME}_test_type_key_no_rtti
+    PRIVATE $<IF:$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>,/GR-,-fno-rtti>
+  )
+  # The project root, so the file includes the scenarios it shares with the main
+  # binary from test/helpers/ the way docs/cpp-conventions.md asks.
+  target_include_directories(${PROJECT_NAME}_test_type_key_no_rtti PRIVATE ${PROJECT_SOURCE_DIR})
+  target_link_libraries(
+    ${PROJECT_NAME}_test_type_key_no_rtti PRIVATE ${PROJECT_NAME} Catch2::Catch2WithMain
+  )
+  catch_discover_tests(${PROJECT_NAME}_test_type_key_no_rtti)
 
   # Guards the re-export list in src/arude.cppm. A public name added to a header
   # and not listed there is invisible to module consumers and to nobody else, so

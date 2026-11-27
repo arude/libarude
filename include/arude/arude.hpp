@@ -22,7 +22,16 @@
 #include "arude/noncopyable.hpp"
 #include "arude/pimpl_owner.hpp"
 #include "arude/signal_owner.hpp"
+#include "arude/type_key.hpp"
 #include "arude/type_name.hpp"
+#include "arude/type_traits.hpp"
+
+// Configuration support is part of libarude, so it is included unless the
+// build has declined it — ARUDE_NO_CONFIG is what the build defines to say
+// that reflect-cpp and toml++ are not there to be included.
+#if !(defined ARUDE_NO_CONFIG)
+  #include "arude/config.hpp"
+#endif // #if !(defined ARUDE_NO_CONFIG)
 
 ///
 /// Root namespace for everything libarude provides.

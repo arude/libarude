@@ -11,17 +11,121 @@ A utility and helper library for C++ projects.
 > **Status: early.** The repository is being rebuilt from scratch. There is not
 > much here yet.
 
+## Configuration
+
+`arude/config.hpp` keeps a C++ struct in a TOML file. The struct is a plain
+aggregate that carries its own version; a member wrapped in
+`arude::config::versioned<>` is versioned on its own.
+
+```cpp
+#include "arude/config.hpp"
+
+struct network_config
+{
+  static constexpr auto config_version = arude::config::version_t{1};
+  arude::config::version_t version = config_version;
+  std::string host = "localhost";
+  std::uint16_t port = 8080;
+};
+
+struct app_config
+{
+  static constexpr auto config_version = arude::config::version_t{1};
+  arude::config::version_t version = config_version;
+  std::string name = "demo";
+  std::chrono::sys_seconds started{};
+  arude::config::versioned<network_config> network;
+};
+
+auto file = arude::config::config_file<app_config, arude::config::transport_file>{
+  arude::config::transport_file{"app.toml"}};
+
+file.load();                                      // One read, one parse, the whole struct.
+auto network = file.member(&app_config::network); // Hand a subsystem one member.
+auto value = network.get();
+value.port = 8443;
+network.set(value);
+file.store();                                     // Replaces the file in one step.
+```
+
+```toml
+name = "demo"
+started = 2026-01-02T03:04:05Z
+version = 1
+
+[network]
+host = "example.org"
+port = 8443
+version = 1
+```
+
+- **Versions.** When a type changes, add a new type for the new version that
+  names the old one as `previous_t`, and an `upgrade()` from the old one; see
+  `arude/config/migration.hpp`. `load()` migrates an older file, and refuses
+  one written by a newer build.
+- **Missing parts.** Every field is required, unless it is a `std::optional`,
+  which reads as `std::nullopt` when it is missing — even where the member has
+  an initialiser. A missing file is an error too, unless `load_policy::create`
+  is given, in which case the root is the struct's default. `create` does
+  nothing for a file that is there.
+- **What a store keeps.** The file is written from the struct, so keys and
+  tables the struct does not declare, and comments, are not kept. `store()`
+  refuses to write over data a newer build wrote, root or member, and replaces
+  anything else this build cannot read, a broken hand-edit included;
+  `overwrite()` writes over newer data on purpose.
+- **Dates and times.** TOML's four date and time types read and write as
+  `std::chrono::sys_time`, `local_time`, `year_month_day` and `hh_mm_ss`.
+- **Transports.** `transport_file`, and `transport_https` with
+  `-DARUDE_HTTPS=ON`. `to_toml()` and `from_toml()` work on text directly.
+
+### reflect-cpp
+
+The struct conversion is reflect-cpp's, pinned at 0.23.0 with toml++ 3.4.0 in
+`CMakeLists.txt`, with one patch in `cmake/patches/` that lets MSVC read a
+struct at all. libarude builds on more than its public API: it specialises
+`rfl::parsing::Parser` for `versioned<>`, `rfl::TaggedUnion`, enumerations,
+durations, and dates and times; replaces the internal `rfl::parsing::MapReader`;
+derives its TOML reader and writer from reflect-cpp's, hiding the reader's
+`read_array()` over the internal `VectorReader`, `ArrayReader` and
+`TupleReader`; and names `rfl::internal`, and the enchantum copy reflect-cpp
+bundles, in a few places. Those are reflect-cpp's implementation, so treat a
+reflect-cpp upgrade as a change of its own: bump the version and run the whole
+suite, the `test/configuration/test_toml_*` files above all.
+
+One of its limits shows through: a configuration that contains a
+`versioned<>` member or an `rfl::TaggedUnion` anywhere cannot also contain a
+`std::variant`, an `rfl::Variant` or an `rfl::Result` anywhere, at any depth,
+because reflect-cpp takes the first alternative that parses; that is a
+compile error that says so, and an `rfl::TaggedUnion` is the way to have a
+choice in a versioned configuration. Give each alternative an explicit
+`rfl::Literal` tag field; one tagged by its type name has no field for the
+tag, so `reject_unknown_fields` refuses it. A tag that names no alternative is
+taken for one a newer build added: the load is refused, and `store()` does
+not write over it.
+The check cannot see into a class read through a custom
+`rfl::parsing::Parser` specialisation, so a variant hidden in one is not
+refused.
+
+```cpp
+struct circle { rfl::Literal<"circle"> kind; arude::config::versioned<shape_v2> shape; };
+struct square { rfl::Literal<"square"> kind; std::int32_t side = 0; };
+
+rfl::TaggedUnion<"kind", circle, square> outline = square{};
+```
+
 ## Building
 
 Requires CMake 4.2 or newer, Ninja, and a C++23-capable compiler — Clang 21 is
 what the project is developed against. The first configure downloads
-[magic_enum](https://github.com/Neargye/magic_enum) and Catch2 through
+[magic_enum](https://github.com/Neargye/magic_enum),
+[reflect-cpp](https://github.com/getml/reflect-cpp) and Catch2 through
 [CPM](https://github.com/cpm-cmake/CPM.cmake), so it needs network access; later
-ones do not.
+ones do not. `-DARUDE_NO_CONFIG=ON` skips reflect-cpp.
 
-Of the two, magic_enum is header-only and MIT licensed, and unlike the test and
-benchmark dependencies it is part of the library itself: consumers of the enum
-helpers get its headers on their include path.
+Of those, only Catch2 is test-only. magic_enum is header-only and MIT licensed,
+and reflect-cpp comes with the configuration support: both are part of the
+library itself, so a consumer of the enum helpers or of `arude/config.hpp`
+gets their headers on its include path.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
@@ -73,6 +177,8 @@ speed mid-run; results will be noisy.
 | `ARUDE_CXX_STANDARD` | `26`, or `23` if the compiler cannot do 26 | Language standard |
 | `BUILD_TESTING` | `ON` | `OFF` skips the Catch2 download and the test target |
 | `ARUDE_BUILD_BENCHMARKS` | `ON` | `OFF` skips the Google Benchmark download and its target |
+| `ARUDE_NO_CONFIG` | `OFF` | `ON` skips the reflect-cpp download, and with it `arude/config.hpp` |
+| `ARUDE_HTTPS` | `OFF` | `ON` adds the HTTPS configuration transport: downloads cpp-httplib and needs a TLS backend on the machine |
 | `ARUDE_ENABLE_COVERAGE` | `OFF` | Adds `--coverage` instrumentation, for the coverage job |
 | `CMAKE_BUILD_TYPE` | — | `Debug` or `Release` |
 

@@ -15,6 +15,10 @@
 ///
 #pragma once
 
+// Included for the std::formatter it carries for every enum, and not for a
+// name used here: without it exception<errors> reports its payload as not
+// formattable, which is the part of the report a caller wants most.
+#include "arude/enum.hpp"
 #include "arude/exception.hpp"
 
 #include <cstddef>
@@ -23,6 +27,7 @@
 #include <format>
 #include <string>
 #include <system_error>
+#include <utility>
 
 ///
 /// Most levels of nested exception arude::exception_report() will unwind.
@@ -111,6 +116,164 @@ inline auto exception_report_guard::exhausted() const -> bool
   return level_ > ARUDE_EXCEPTION_REPORT_MAX_DEPTH;
 }
 
+///
+/// One link of a chain of nested exceptions, as arude::exception_message()
+/// reads it.
+///
+struct exception_link
+{
+  ///
+  /// The message of the exception at this link.
+  ///
+  exception_string_t message;
+
+  ///
+  /// The exception nested in it, or null where there is none.
+  ///
+  std::exception_ptr nested;
+};
+
+///
+/// Whether the build has RTTI. clang and gcc define __GXX_RTTI, msvc defines
+/// _CPP_RTTI, and __cpp_rtti is the standard spelling newer front ends also
+/// provide.
+///
+inline constexpr auto rtti_available =
+#if (defined __cpp_rtti) || (defined __GXX_RTTI) || (defined _CPP_RTTI)
+  true;
+#else
+  false;
+#endif // #if (defined __cpp_rtti) || (defined __GXX_RTTI) || (defined _CPP_RTTI)
+
+///
+/// Rethrows the exception nested in the one being handled, if there is one.
+/// With RTTI this is std::rethrow_if_nested. Without it, libc++'s
+/// std::rethrow_if_nested does not compile, as it finds the nesting with
+/// dynamic_cast, so the exception being handled is rethrown and caught as a
+/// std::nested_exception instead. That route keeps one more exception in
+/// flight per level, which MSVC pays for in stack, so it is taken only where
+/// it is needed.
+///
+/// Call it only from inside the catch block that caught ex.
+///
+/// \param ex The exception being handled.
+/// \throws Whatever is nested in it.
+///
+auto rethrow_if_nested_in(const auto& ex) -> void;
+
+///
+/// Returns the exception nested in the one being handled, if there is one.
+/// Call it only from inside the catch block that caught ex.
+///
+/// \param ex The exception being handled.
+/// \return The nested exception, or null where there is none.
+///
+[[nodiscard]] auto nested_exception_of(const auto& ex) -> std::exception_ptr;
+
+///
+/// Reads the message of an exception and the exception nested in it.
+///
+/// \param eptr The exception. Must not be null.
+/// \return Its message, as arude::exception_message() describes it, and the
+///         exception nested in it.
+/// \throws std::bad_alloc If the message string cannot be allocated.
+///
+[[nodiscard]] auto read_exception_link(const std::exception_ptr& eptr) -> exception_link;
+
+///
+///
+auto rethrow_if_nested_in(const auto& ex) -> void
+{
+  if constexpr(rtti_available)
+  {
+    std::rethrow_if_nested(ex);
+  }
+  else
+  {
+    try
+    {
+      throw;
+    }
+    catch(const std::nested_exception& nested)
+    {
+      // A nested_exception made outside a catch block holds nothing, and
+      // rethrow_nested() on that terminates.
+      if(nested.nested_ptr() != nullptr)
+      {
+        nested.rethrow_nested();
+      }
+    }
+    catch(...)
+    {
+      // Not a nested_exception, so there is nothing nested to rethrow.
+      return;
+    }
+  }
+}
+
+///
+///
+auto nested_exception_of(const auto& ex) -> std::exception_ptr
+{
+  try
+  {
+    rethrow_if_nested_in(ex);
+  }
+  catch(...)
+  {
+    return std::current_exception();
+  }
+
+  return nullptr;
+}
+
+///
+///
+inline auto read_exception_link(const std::exception_ptr& eptr) -> exception_link
+{
+  try
+  {
+    std::rethrow_exception(eptr);
+  }
+  catch(const char chr)
+  {
+    return {.message = exception_string_t(1, chr), .nested = nullptr};
+  }
+  catch(const char* const str)
+  {
+    // A thrown null pointer is still a const char*, and no string to copy.
+    return {.message = str != nullptr ? str : "Unknown exception", .nested = nullptr};
+  }
+  catch(const short num)
+  {
+    return {.message = std::format("{}", num), .nested = nullptr};
+  }
+  catch(const int num)
+  {
+    return {.message = std::format("{}", num), .nested = nullptr};
+  }
+  catch(const float num)
+  {
+    return {.message = std::format("{}", num), .nested = nullptr};
+  }
+  catch(const double num)
+  {
+    return {.message = std::format("{}", num), .nested = nullptr};
+  }
+  catch(const exception_base& ex)
+  {
+    return {.message = ex.str(), .nested = nested_exception_of(ex)};
+  }
+  catch(const std::exception& ex)
+  {
+    return {.message = ex.what(), .nested = nested_exception_of(ex)};
+  }
+  catch(...)
+  {
+    return {.message = "Unknown exception", .nested = nullptr};
+  }
+}
+
 } // namespace arude::detail
 
 namespace arude
@@ -139,6 +302,23 @@ namespace arude
 /// \throws std::bad_alloc If the report string cannot be allocated.
 ///
 [[nodiscard]] auto exception_report(const std::exception_ptr& eptr) -> exception_string_t;
+
+///
+/// Returns the message of the exception being handled, and nothing else.
+/// What to embed in the message of an exception thrown in its place: unlike
+/// exception_report(), it carries no location and no stacktrace, so the report
+/// of the exception thrown in its place names one location and holds one
+/// stacktrace. A nested exception's message follows its outer one after ": ",
+/// for up to ARUDE_EXCEPTION_REPORT_MAX_DEPTH levels. Must be called from
+/// inside a catch handler; with no exception in flight it says so instead of
+/// failing.
+///
+/// \return str() of an arude exception, what() of a std::exception, the text of
+///         a thrown string literal, the value of a thrown char, short, int,
+///         float or double, or a stand-in naming the exception as unknown.
+/// \throws std::bad_alloc If the message string cannot be allocated.
+///
+[[nodiscard]] auto exception_message() -> exception_string_t;
 
 ///
 ///
@@ -197,7 +377,7 @@ inline auto exception_report() -> exception_string_t
     catch(const exception_base& ex)
     {
       nested_string = std::format("{}{}", nested_string, ex.to_string());
-      std::rethrow_if_nested(ex);
+      detail::rethrow_if_nested_in(ex);
     }
 // <expected> exists as a header on toolchains that do not implement it, so the
 // include alone proves nothing; this is the feature test that does. Where it is
@@ -207,23 +387,23 @@ inline auto exception_report() -> exception_string_t
     catch(const std::bad_expected_access<std::string>& ex)
     {
       nested_string += std::format("std::bad_expected_access - Error: {}", ex.error());
-      std::rethrow_if_nested(ex);
+      detail::rethrow_if_nested_in(ex);
     }
     catch(const std::bad_expected_access<void>& ex)
     {
       nested_string += std::format("std::bad_expected_access {}", ex.what());
-      std::rethrow_if_nested(ex);
+      detail::rethrow_if_nested_in(ex);
     }
 #endif // #if (defined __cpp_lib_expected)
     catch(const std::system_error& ex)
     {
       nested_string += std::format("std::system_error: {} ({})", ex.what(), ex.code().value());
-      std::rethrow_if_nested(ex);
+      detail::rethrow_if_nested_in(ex);
     }
     catch(const std::exception& ex)
     {
       nested_string += ex.what();
-      std::rethrow_if_nested(ex);
+      detail::rethrow_if_nested_in(ex);
     }
     catch(...)
     {
@@ -258,6 +438,36 @@ inline auto exception_report(const std::exception_ptr& eptr) -> exception_string
   {
     return exception_report();
   }
+}
+
+///
+///
+inline auto exception_message() -> exception_string_t
+{
+  auto current = std::current_exception();
+
+  if(current == nullptr)
+  {
+    return "No exception is being handled";
+  }
+
+  auto message = exception_string_t{};
+
+  // A loop rather than recursion, so a cyclic or runaway chain stops at the
+  // depth limit without the guard exception_report() needs.
+  for(auto depth = 0; current != nullptr && depth < ARUDE_EXCEPTION_REPORT_MAX_DEPTH; ++depth)
+  {
+    if(depth > 0)
+    {
+      message += ": ";
+    }
+
+    auto link = detail::read_exception_link(current);
+    message += link.message;
+    current = std::move(link.nested);
+  }
+
+  return message;
 }
 
 } // namespace arude

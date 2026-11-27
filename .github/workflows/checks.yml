@@ -35,6 +35,25 @@ jobs:
           printf 'Checking %d file(s)\n' "${#files[@]}"
           clang-format --dry-run --Werror "${files[@]}"
 
+      - name: Trailing newlines
+        run: |
+          # docs/cpp-conventions.md requires every file to end with a newline.
+          # The step above already covers the C++ sources, through
+          # clang-format's InsertNewlineAtEOF; this covers CMake, the workflows
+          # and the dotfiles, which no formatter sees. A tracked binary would
+          # have to be excluded here, and there are none.
+          mapfile -t files < <(git ls-files)
+          printf 'Checking %d file(s)\n' "${#files[@]}"
+          # An empty file has no last byte and needs no newline, so -s skips it.
+          status=0
+          for f in "${files[@]}"; do
+            if [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ]; then
+              echo "::error file=$f::no newline at end of file"
+              status=1
+            fi
+          done
+          exit $status
+
       - name: Licence headers
         run: |
           mapfile -t files < <(git ls-files '*.hpp' '*.cpp' '*.h' '*.cc' '*.hxx' '*.cxx')
