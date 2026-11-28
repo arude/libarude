@@ -308,13 +308,6 @@ struct log_config
   };
 
   ///
-  /// The version this configuration carries in its TOML text, initialised from
-  /// config_version. Part of the data because arude::config stores the root
-  /// as a versioned configuration.
-  ///
-  std::uint32_t version = config_version;
-
-  ///
   /// Default level for every channel, before any channel_level override.
   /// Defaults to info.
   ///
