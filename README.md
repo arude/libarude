@@ -14,8 +14,8 @@ A utility and helper library for C++ projects.
 ## Configuration
 
 `arude/config.hpp` keeps a C++ struct in a TOML file. The struct is a plain
-aggregate that carries its own version; a member wrapped in
-`arude::config::versioned<>` is versioned on its own.
+aggregate that states its version once, as `config_version`; a member wrapped
+in `arude::config::versioned<>` is versioned on its own.
 
 ```cpp
 #include "arude/config.hpp"
@@ -23,7 +23,6 @@ aggregate that carries its own version; a member wrapped in
 struct network_config
 {
   static constexpr auto config_version = arude::config::version_t{1};
-  arude::config::version_t version = config_version;
   std::string host = "localhost";
   std::uint16_t port = 8080;
 };
@@ -31,7 +30,6 @@ struct network_config
 struct app_config
 {
   static constexpr auto config_version = arude::config::version_t{1};
-  arude::config::version_t version = config_version;
   std::string name = "demo";
   std::chrono::sys_seconds started{};
   arude::config::versioned<network_config> network;
@@ -59,6 +57,11 @@ port = 8443
 version = 1
 ```
 
+- **The version key.** The `version` key in each table is libarude's, written
+  from `config_version` and taken out of the table again before the rest is
+  read, so the struct has no member for it. A struct that declares a data
+  member called `version` does not satisfy `arude::config::configuration_c`
+  and fails to compile, as the member would collide with the key.
 - **Versions.** When a type changes, add a new type for the new version that
   names the old one as `previous_t`, and an `upgrade()` from the old one; see
   `arude/config/migration.hpp`. `load()` migrates an older file, and refuses

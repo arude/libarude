@@ -136,11 +136,6 @@ struct writer_config
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// An unsigned field, as large as TOML allows.
   ///
   std::uint64_t big = 0;

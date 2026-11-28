@@ -52,11 +52,6 @@ struct times
   static constexpr auto config_version = version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// A time point at nanosecond precision.
   ///
   std::chrono::sys_time<std::chrono::nanoseconds> created;
@@ -115,11 +110,6 @@ struct coarse_times
   static constexpr auto config_version = version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// A time point at whole weeks.
   ///
   std::chrono::sys_time<std::chrono::weeks> week;
@@ -163,11 +153,6 @@ struct narrow_times
   static constexpr auto config_version = version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// A time point in 32-bit minutes, which end about 4083 years from the
   /// epoch.
   ///
@@ -193,11 +178,6 @@ struct optional_times
   /// The version this type is.
   ///
   static constexpr auto config_version = version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// An optional time point.
@@ -231,11 +211,6 @@ struct vector_times
   static constexpr auto config_version = version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// Time points in a vector.
   ///
   std::vector<std::chrono::sys_time<std::chrono::seconds>> stamps;
@@ -267,11 +242,6 @@ struct event_v1
   static constexpr auto config_version = version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The event's name.
   ///
   std::string name = "event";
@@ -291,11 +261,6 @@ struct event_v2
   /// \see event_v1::config_version
   ///
   static constexpr auto config_version = version_t{2};
-
-  ///
-  /// \see event_v1::version
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// \see event_v1::name
@@ -345,11 +310,6 @@ struct schedule_root
   /// The version this type is.
   ///
   static constexpr auto config_version = version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The event, carrying its own version.
@@ -404,11 +364,6 @@ struct unreduced_times
   static constexpr auto config_version = version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// A time point in tenths of a second, spelled std::ratio<10, 100>.
   ///
   std::chrono::sys_time<std::chrono::duration<std::int64_t, std::ratio<10, 100>>> at;
@@ -423,11 +378,6 @@ struct minute_of_day
   /// The version this type is.
   ///
   static constexpr auto config_version = version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// A time of day at minute precision.
