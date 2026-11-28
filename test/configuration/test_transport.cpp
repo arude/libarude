@@ -305,7 +305,7 @@ SCENARIO("a read-only transport refuses to be written", "[config][transport]")
     THEN("reading works")
     {
       file.load();
-      REQUIRE(file.get().version == arude::config::version_of<test_helpers::config_test_t>());
+      REQUIRE(file.get().name == test_helpers::config_test_t{}.name);
     }
 
     THEN("storing is a read_only, and nothing was serialized to get there")
@@ -335,7 +335,7 @@ SCENARIO("a read-only transport refuses to be written", "[config][transport]")
       absent.load(policy);
 
       REQUIRE(absent.loaded());
-      REQUIRE(absent.get().version == arude::config::version_of<test_helpers::config_test_t>());
+      REQUIRE(absent.get().name == test_helpers::config_test_t{}.name);
       REQUIRE(!store.contains("absent"));
 
       try

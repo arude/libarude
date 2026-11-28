@@ -96,6 +96,12 @@ public: // Accessors
   ///
   [[nodiscard]] auto context() const -> write_context&;
 
+  ///
+  /// Returns the table the writer writes into, which a root is written as.
+  /// \return The table.
+  ///
+  [[nodiscard]] auto root() const -> toml::table&;
+
 public: // Methods
   ///
   /// Adds an array to a table, keeping a key holding dots one key.
@@ -171,6 +177,12 @@ public: // Methods
   auto add_null_to_object(std::string_view name, OutputObjectType* parent) const noexcept -> OutputVarType;
 
 private: // Variables
+  ///
+  /// The table written into. Never null. The base keeps its own copy of the
+  /// pointer, private to it.
+  ///
+  toml::table* root_;
+
   ///
   /// The context of the write. Never null.
   ///

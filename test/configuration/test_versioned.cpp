@@ -43,11 +43,6 @@ struct network_v1
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The host, as version 1 names it.
   ///
   std::string host = "v1-host";
@@ -67,11 +62,6 @@ struct network_v2
   /// \see network_v1::config_version
   ///
   static constexpr auto config_version = arude::config::version_t{2};
-
-  ///
-  /// \see network_v1::version
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The host, as version 2 names it.
@@ -115,11 +105,6 @@ struct app
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The application's name.
   ///
   std::string name = "app";
@@ -141,11 +126,6 @@ struct boom_v1
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The host.
   ///
   std::string host = "x";
@@ -165,11 +145,6 @@ struct boom_v2
   /// \see boom_v1::config_version
   ///
   static constexpr auto config_version = arude::config::version_t{2};
-
-  ///
-  /// \see boom_v1::version
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The host, renamed.
@@ -199,11 +174,6 @@ struct boom_app
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The member whose upgrade throws.
   ///
   arude::config::versioned<boom_v2> member;
@@ -219,11 +189,6 @@ struct holder
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// A nested versioned member, as a field.
@@ -344,10 +309,10 @@ SCENARIO("a root and its versioned members are read under one version rule", "[c
       const auto loaded =
         versioned_test::read<versioned_test::app>(text, arude::config::load_policy::upgrade_to_current);
 
-      THEN("the member is migrated to version 2, and stamped as version 2")
+      THEN("the member is migrated to version 2")
       {
         REQUIRE(loaded.network.value().hostname == "old-host");
-        REQUIRE(loaded.network.value().version == 2);
+        REQUIRE(loaded.network.value().port == versioned_test::network_v2{}.port);
       }
     }
 
@@ -461,7 +426,6 @@ SCENARIO("the root itself is versioned like a member", "[config][versioned]")
 
       THEN("the root is migrated, and what version 2 added takes its default")
       {
-        REQUIRE(loaded.version == 2);
         REQUIRE(loaded.name == "example");
         REQUIRE(loaded.endpoint == "localhost");
       }
@@ -628,31 +592,20 @@ SCENARIO("a versioned member may nest anywhere a member can sit", "[config][vers
   }
 }
 
-SCENARIO("a write stamps the version the type declares", "[config][versioned]")
+SCENARIO("a write gives every versioned table the version its type declares", "[config][versioned]")
 {
-  GIVEN("a root whose version members hold the wrong numbers")
+  GIVEN("a root holding a versioned member of another version")
   {
-    auto value = versioned_test::app{};
-    value.version = 99;
-    value.network.value().version = 77;
+    const auto value = versioned_test::app{};
 
-    WHEN("it is written and read back")
+    WHEN("it is written")
     {
-      const auto text =
-        arude::config::detail::render_toml(arude::config::detail::write_root(value, std::source_location::current()));
+      const auto document = arude::config::detail::write_root(value, std::source_location::current());
 
-      auto document = arude::config::detail::parse_toml(text, "<text>", std::source_location::current());
-      const auto loaded = arude::config::detail::read_root<versioned_test::app>(
-        document,
-        arude::config::load_policy::upgrade_to_current,
-        arude::config::toml_format{},
-        "<text>",
-        std::source_location::current());
-
-      THEN("every version is the one its type declares, not the one the value held")
+      THEN("the root and the member each carry their own type's version")
       {
-        REQUIRE(loaded.version == 1);
-        REQUIRE(loaded.network.value().version == 2);
+        REQUIRE(document["version"].value<std::int64_t>() == 1);
+        REQUIRE(document["network"]["version"].value<std::int64_t>() == 2);
       }
     }
   }

@@ -12,7 +12,10 @@
 /// read through the Parser specialisation below, which is what keeps the
 /// whole file on one version rule: a member's table carries a version key,
 /// and on read the table is parsed as whichever version of T's previous_t
-/// chain the key names, then migrated to T. The specialisation is selected
+/// chain the key names, then migrated to T. The key is libarude's, not the
+/// type's: it is written from T::config_version beside the reflected members,
+/// and taken out of the table for the length of the read, so the type
+/// declares no member for it. The specialisation is selected
 /// because reflect-cpp's parsers are templated on the reader type, and no
 /// specialisation of its own overlaps versioned<T>.
 ///
@@ -28,8 +31,10 @@
 #include "arude/config/toml_reader.hpp"
 #include "arude/config/toml_writer.hpp"
 #include "arude/exception_report.hpp"
+#include "arude/noncopyable.hpp"
 #include "arude/type_name.hpp"
 
+#include <rfl/always_false.hpp>
 #include <rfl/Box.hpp>
 #include <rfl/Field.hpp>
 #include <rfl/Generic.hpp>
@@ -75,8 +80,8 @@ namespace arude::config
 /// A member that carries its own version.
 /// A transparent wrapper: it converts from T, hands T out, and compares as
 /// its value. On read the member's table is parsed as the version its key
-/// names and migrated to T; on write the value is stamped with T's version,
-/// whatever the value's version member holds.
+/// names and migrated to T; on write the table is given a version key holding
+/// T's version.
 ///
 /// \tparam T The configuration type held, normally the newest version of it.
 ///
@@ -790,6 +795,60 @@ struct contains_untagged_variant : search<untagged_variant_leaf, T, Depth>
 {};
 
 ///
+/// The key a versioned table carries its version under.
+///
+inline constexpr auto version_key = std::string_view{"version"};
+
+///
+/// Takes a table's version key out for the length of a read, and puts it back
+/// when destroyed. A configuration type declares no member for the key, so
+/// rfl::NoExtraFields would otherwise refuse it as unknown; and the table is
+/// the caller's, so it comes back as it was given, for the probe or a second
+/// read of the same document. Should putting the key back fail for want of
+/// memory, the key stays out rather than the exception escaping.
+///
+// NOLINTNEXTLINE(cppcoreguidelines-special-member-functions): the copy members come deleted from arude::noncopyable.
+class hidden_version_key final : public noncopyable
+{
+public: // Structors
+  ///
+  /// Takes the version key out of a table, if it holds one.
+  /// \param table The table. Retained, and must outlive this object.
+  ///
+  explicit hidden_version_key(toml::table& table);
+
+  ///
+  /// Puts the version key back.
+  ///
+  ~hidden_version_key();
+
+private: // Variables
+  ///
+  /// The table the key was taken out of. Never null.
+  ///
+  toml::table* table_;
+
+  ///
+  /// The key taken out, as the one entry of a table of its own; empty where
+  /// the table held none.
+  ///
+  toml::table saved_;
+};
+
+///
+/// Returns the table a Parser has just written a value into, found from the
+/// parent the value was written under: the root, the key of a table, or the
+/// last element of an array.
+///
+/// \tparam P The parent type, as rfl::parsing::Parent<toml_writer> spells it.
+/// \param writer The writer, for the root.
+/// \param parent The parent the value was written under.
+/// \return The table, or nullptr where the value was not written as one.
+///
+template<typename P>
+[[nodiscard]] auto written_table(const toml_writer& writer, const P& parent) -> toml::table*;
+
+///
 /// Reads a table as a versioned configuration of T.
 /// The version key decides: the table is read as T, migrated to T from the
 /// older version the key names, or refused where the key names none, names a
@@ -900,6 +959,10 @@ auto read_versioned(const toml_reader& reader, toml::node* const node) -> rfl::R
 
   const auto version = *version_result;
 
+  // T has no member for the key, so it is out of the table for every read
+  // below, older versions included, and back in once they are done.
+  const auto hidden = hidden_version_key{*table};
+
   if(version > T::config_version)
   {
     auto message = newer_message(type_name<T>(), version, T::config_version);
@@ -977,6 +1040,38 @@ auto read_older(const toml_reader& reader, toml::node* const node, const version
   }
 }
 
+///
+///
+template<typename P>
+auto written_table(const toml_writer& writer, const P& parent) -> toml::table*
+{
+  using parent_t = std::remove_cvref_t<P>;
+  using parents_t = rfl::parsing::Parent<toml_writer>;
+
+  if constexpr(std::same_as<parent_t, typename parents_t::Root>)
+  {
+    return &writer.root();
+  }
+  else if constexpr(std::same_as<parent_t, typename parents_t::Object>)
+  {
+    auto* const node = parent.obj_->val_->get(parent.name_);
+
+    return node == nullptr ? nullptr : node->as_table();
+  }
+  else if constexpr(std::same_as<parent_t, typename parents_t::Array>)
+  {
+    auto& elements = *parent.arr_->val_;
+
+    return elements.empty() ? nullptr : elements.back().as_table();
+  }
+  else
+  {
+    static_assert(rfl::always_false_v<P>, "arude::config: a versioned<> member is written under an unknown parent.");
+
+    return nullptr;
+  }
+}
+
 } // namespace arude::config::detail
 
 namespace rfl::parsing
@@ -1015,8 +1110,10 @@ public: // Methods
     -> Result<arude::config::versioned<T>>;
 
   ///
-  /// Writes the value, stamped with T's version. Whatever the writing throws
-  /// is recorded as a failure through the writer's context instead.
+  /// Writes the value, and T's version as the table's version key beside its
+  /// members. A table that already holds the key, from a member renamed to
+  /// it, and a value not written as a table are failures recorded through the
+  /// writer's context, and so is whatever the writing throws.
   /// \tparam P The parent type, as rfl::parsing::Parent spells it.
   /// \param writer The writer.
   /// \param val The wrapper.
@@ -1079,14 +1176,33 @@ auto Parser<
 {
   try
   {
-    // The version written is the one the type declares, whatever the value's
-    // version member happens to hold, so text cannot come out claiming to be
-    // a version it is not.
-    auto stamped = val.value();
-    stamped.version = T::config_version;
-
     Parser<arude::config::detail::toml_reader, arude::config::detail::toml_writer, T, ProcessorsType>::write(
-      writer, stamped, parent);
+      writer, val.value(), parent);
+
+    // The key goes in after the members rather than before: toml::table keeps
+    // its keys sorted, so the text rendered is the same either way, and a
+    // member that took the key first is caught here.
+    auto* const table = arude::config::detail::written_table(writer, parent);
+
+    if(table == nullptr)
+    {
+      writer.context().fail(
+        std::format(
+          "{} is not written as a table, so it cannot carry a configuration version.", arude::type_name<T>()));
+
+      return;
+    }
+
+    const auto version = static_cast<std::int64_t>(arude::config::version_of<T>());
+
+    if(!table->insert(arude::config::detail::version_key, version).second)
+    {
+      writer.context().fail(
+        std::format(
+          "{} writes a member as '{}', the key its configuration version is written under.",
+          arude::type_name<T>(),
+          arude::config::detail::version_key));
+    }
   }
   catch(...)
   {

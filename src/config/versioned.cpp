@@ -9,13 +9,46 @@
 
 #include "arude/config/versioned.hpp"
 
+#include <toml++/toml.hpp>
+
 #include <cstdint>
 #include <format>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace arude::config::detail
 {
+
+///
+///
+hidden_version_key::hidden_version_key(toml::table& table)
+  : table_{&table}
+{
+  if(const auto* const node = table.get(version_key); node != nullptr)
+  {
+    node->visit([this](const auto& value) -> void { saved_.insert_or_assign(version_key, value); });
+    table.erase(version_key);
+  }
+}
+
+///
+///
+hidden_version_key::~hidden_version_key()
+{
+  try
+  {
+    if(auto* const node = saved_.get(version_key); node != nullptr)
+    {
+      node->visit([this](auto& value) -> void { table_->insert_or_assign(version_key, std::move(value)); });
+    }
+  }
+  catch(...) // NOLINT(bugprone-empty-catch): the key staying out is the handling.
+  {
+    // Only an allocation can fail here, and nothing escapes a destructor:
+    // the key stays out, which a later read reports as a missing version.
+  }
+}
 
 ///
 ///

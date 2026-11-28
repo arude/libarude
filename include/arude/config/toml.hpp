@@ -295,8 +295,8 @@ namespace arude::config
 /// Renders a configuration as TOML text.
 /// The text-level counterpart to config_file::store(), for a configuration
 /// that has to become a string rather than reach a transport. The version
-/// written is the one the type declares, whatever the value's version member
-/// happens to hold, so text cannot come out claiming to be a version it is not.
+/// key written is T::config_version, put beside the reflected members by
+/// arude::config, so text cannot come out claiming to be a version it is not.
 ///
 /// \tparam T Configuration type.
 /// \param val Configuration to render. Not retained.

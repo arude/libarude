@@ -39,11 +39,6 @@ struct network_v1
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The host, as version 1 names it.
   ///
   std::string host = "v1-host";
@@ -63,11 +58,6 @@ struct network_v2
   /// \see network_v1::config_version
   ///
   static constexpr auto config_version = arude::config::version_t{2};
-
-  ///
-  /// \see network_v1::version
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The host, as version 2 names it.
@@ -109,11 +99,6 @@ struct app
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The application's name.

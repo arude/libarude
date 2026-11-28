@@ -42,6 +42,7 @@ auto write_context::failure() const -> const std::optional<std::string>&
 ///
 toml_writer::toml_writer(toml::table& root, write_context& context)
   : rfl::toml::Writer{&root}
+  , root_{&root}
   , context_{&context}
 {
 }
@@ -51,6 +52,13 @@ toml_writer::toml_writer(toml::table& root, write_context& context)
 auto toml_writer::context() const -> write_context&
 {
   return *context_;
+}
+
+///
+///
+auto toml_writer::root() const -> toml::table&
+{
+  return *root_;
 }
 
 ///

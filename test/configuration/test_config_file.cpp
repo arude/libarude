@@ -64,11 +64,6 @@ struct inner_v1
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// A depth.
   ///
   std::int32_t depth = 7;
@@ -83,11 +78,6 @@ struct network_v1
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The host, as version 1 names it.
@@ -110,11 +100,6 @@ struct network_v2
   /// \see network_v1::config_version
   ///
   static constexpr auto config_version = arude::config::version_t{2};
-
-  ///
-  /// \see network_v1::version
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The host, as version 2 names it.
@@ -166,11 +151,6 @@ struct app
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// The application's name.
@@ -235,11 +215,6 @@ struct flaggy
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// A flag field.
   ///
   flags mode = flags::a;
@@ -254,11 +229,6 @@ struct optionals
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// A required field.
@@ -289,11 +259,6 @@ struct layer_v1
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// A nested versioned member.
   ///
   arude::config::versioned<inner_v1> inner;
@@ -313,11 +278,6 @@ struct layer_v2
   /// \see layer_v1::config_version
   ///
   static constexpr auto config_version = arude::config::version_t{2};
-
-  ///
-  /// \see layer_v1::version
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// A nested versioned member.
@@ -361,11 +321,6 @@ struct layered
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// The layered member, carrying its own version.
   ///
   arude::config::versioned<layer_v2> layer;
@@ -398,11 +353,6 @@ struct racked
   static constexpr auto config_version = arude::config::version_t{1};
 
   ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
-
-  ///
   /// Structs holding a versioned member, in a vector.
   ///
   std::vector<slot> slots;
@@ -424,11 +374,6 @@ struct tupled
   /// The version this type is.
   ///
   static constexpr auto config_version = arude::config::version_t{1};
-
-  ///
-  /// The version carried in the text.
-  ///
-  arude::config::version_t version = config_version;
 
   ///
   /// A count and a versioned member, as a std::tuple.
@@ -518,7 +463,6 @@ SCENARIO("a file is loaded and stored whole", "[config][config_file]")
 
         REQUIRE(second.get().name == "stored");
         REQUIRE(second.get().network.value().hostname == "source-host");
-        REQUIRE(second.get().network.value().version == 2);
         REQUIRE(second.get().extra.value().depth == 3);
       }
     }
@@ -546,9 +490,7 @@ SCENARIO("versioned members migrate independently of each other", "[config][conf
       THEN("the older member is migrated and the current one read, each as its own type")
       {
         REQUIRE(file.get().network.value().hostname == "old-host");
-        REQUIRE(file.get().network.value().version == 2);
         REQUIRE(file.get().extra.value().depth == 9);
-        REQUIRE(file.get().extra.value().version == 1);
       }
     }
   }

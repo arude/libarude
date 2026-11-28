@@ -21,7 +21,11 @@
 /// A configuration is one plain aggregate per file, reflected by reflect-cpp
 /// and stored as TOML. The application holds the newest version of each type
 /// in a config_file over a transport, and injects one member of it into a
-/// subsystem through a handle:
+/// subsystem through a handle. A type states its version once, as
+/// static constexpr config_version; arude::config writes that as the table's
+/// version key and takes the key out again before reading the rest, so the
+/// type declares no member for it, and one that declares a data member called
+/// version is not a configuration_c:
 ///
 /// ```cpp
 /// auto file = arude::config::config_file<app_config, arude::config::transport_file>{
